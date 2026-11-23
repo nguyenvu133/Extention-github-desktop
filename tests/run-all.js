@@ -1,17 +1,17 @@
 'use strict';
 /**
- * tests/run-all.js — Run the FULL v3.0.2 test suite in one command.
+ * tests/run-all.js — Run the FULL v3.1.0 test suite in one command.
  *
  *   node tests/run-all.js
  *
  * Starts a real bridge on BRIDGE_PORT (default 17321) — needed by
  * tests/extension-test.js, which reads bridge/.bridge-token — then runs
- * all 8 suites in order and stops the bridge. Exit code 0 = all pass.
+ * all 9 suites in order and stops the bridge. Exit code 0 = all pass.
  *
  * No real GitHub API is called: bridge-v2-test.js, bridge-v21-test.js,
- * bridge-v3-test.js, bridge-v301-test.js and bridge-v302-test.js use
+ * bridge-v3-test.js, bridge-v301-test.js, bridge-v302-test.js and bridge-v310-test.js use
  * their own mock GitHub servers and their own bridges on ports 17399,
- * 17398, 17397, 17395 and 17394.
+ * 17398, 17397, 17395, 17394 and 17386.
  */
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -31,7 +31,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v3.0.2 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v3.1.0 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -70,6 +70,7 @@ async function main() {
     ['bridge-v3-test.js', 'Bridge v3.0 (login diagnostics + PAT guard + zip + GitHub API v3 + cherry-pick/revert/reset/tags)'],
     ['bridge-v301-test.js', 'Bridge v3.0.1 (Failed to fetch fix: bridge-client, CORS, connection-test, login gate, start scripts)'],
     ['bridge-v302-test.js', 'Bridge v3.0.2 (start-windows.bat CRLF/ASCII fix + .ps1 + doctor + launcher waits for /health)'],
+    ['bridge-v310-test.js', 'Bridge v3.1.0 (extended pull/push: preview, autostash, undo, rebase flow, all branches, refspecs, multi-remote, history, GitHub token, Node 16.13)'],
     ['extension-test.js', 'Extension functional (local Git against the live bridge)'],
   ];
   let failed = 0;

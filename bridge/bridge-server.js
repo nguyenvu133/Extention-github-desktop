@@ -3,9 +3,9 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.0.2
+ * v3.1.0
  *
- * A dependency-free local bridge (Node >= 18, only built-in modules) that
+ * A dependency-free local bridge (Node >= 16.13, only built-in modules) that
  * exposes two things to the companion Chrome extension:
  *
  *   1. LOCAL GIT  - v1 feature set + v2.1 push/pull expansion: pull
@@ -31,6 +31,18 @@
  *      file delete, code search, notifications, full profile; local
  *      git adds cherry-pick, revert, reset (hard needs confirm) and
  *      tags (create/list/delete/push).
+ *   4. v3.1.0 - extended pull/push: pull preview (incoming commits,
+ *      fast-forward?, dirty overlap, likely conflicts), autostash,
+ *      prune/tags/squash/no-commit/-X strategy/unrelated/submodules/
+ *      unshallow/depth, rebase-merges, undo last pull (reset --keep),
+ *      pull ALL branches (fast-forward only), rebase continue/skip/
+ *      abort + rebase-aware ours/theirs; push preview (outgoing,
+ *      will-be-rejected), --porcelain ref report, rejection reason +
+ *      Vietnamese hint, dry-run, push to another remote branch name,
+ *      push up to a commit, multi-remote push, --follow-tags,
+ *      --atomic, --no-verify, -o push options, --force-if-includes,
+ *      explicit lease SHA; live progress over SSE; pull/push history;
+ *      GitHub HTTPS remotes reuse the signed-in token. Node >= 16.13.
  *
  * Design rules (kept from v1, extended):
  *  - Binds to 127.0.0.1 only; never exposed to the network.
@@ -52,7 +64,7 @@
  *  - No plain --force / arbitrary shell endpoint. The only forceful
  *    operations are `git push --force-with-lease` and `git reset
  *    --hard`, each only when the caller passes confirm=true explicitly.
- *  - GitHub requests use the global fetch (Node >= 18) with a timeout and
+ *  - GitHub requests use httpFetch (built-in http/https, Node >= 16.13) with a timeout and
  *    honour ETag/If-None-Match so auto-update polling is cheap.
  *
  * Environment overrides (useful for tests):
@@ -79,9 +91,22 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { Readable } = require('stream');
+const https = require('https');
 
-const VERSION = '3.0.2';
+// v3.1.0: minimum Node.js is 16.13.0 (was 18). Fail loudly and clearly.
+(function checkNodeVersion() {
+  const m = /^v(\d+)\.(\d+)/.exec(process.version) || [];
+  const major = Number(m[1]) || 0;
+  const minor = Number(m[2]) || 0;
+  if (major < 16 || (major === 16 && minor < 13)) {
+    console.error(`\n[LOI] Node.js ${process.version} qua cu — bridge can Node.js 16.13.0 tro len.`);
+    console.error('Cai Node.js 16.13+ (khuyen dung ban LTS moi nhat) tai https://nodejs.org/ roi chay lai.\n');
+    process.exit(1);
+  }
+})();
+const { URL } = require('url');
+
+const VERSION = '3.1.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -107,6 +132,100 @@ const AUTO_UPDATE_MAX_SECONDS = 3600;
 const AUTO_UPDATE_DEFAULT_SECONDS = 60;
 const REPO_LIST_CACHE_MS = 60 * 1000;
 const STARTED_AT = Date.now();
+
+/* ------------------------------------------------------------------ */
+/* httpFetch — tiny fetch() replacement (v3.1.0, Node 16.13+)          */
+/* ------------------------------------------------------------------ */
+/* Node 16 has no global fetch / AbortSignal.timeout / Readable.fromWeb */
+/* so the bridge uses this instead on every Node version — one code    */
+/* path, built-in http/https only. Returns a fetch-like response:      */
+/*   { ok, status, headers.get(), text(), json(), arrayBuffer(), body } */
+/* where `body` is the raw Node readable stream (pipe it directly).    */
+/* Redirects are followed (max 10); Authorization is dropped when a    */
+/* redirect leaves the original host (GitHub asset → S3 signed URL).   */
+
+function httpFetch(url, init = {}, redirectsLeft = 10) {
+  return new Promise((resolve, reject) => {
+    let target;
+    try { target = new URL(url); } catch (_) { return reject(new TypeError(`Invalid URL: ${url}`)); }
+    const lib = target.protocol === 'https:' ? https : target.protocol === 'http:' ? http : null;
+    if (!lib) return reject(new TypeError(`Unsupported protocol: ${target.protocol}`));
+    const method = String(init.method || 'GET').toUpperCase();
+    const headers = Object.assign({}, init.headers || {});
+    let payload = null;
+    if (init.body !== undefined && init.body !== null) {
+      payload = Buffer.isBuffer(init.body) ? init.body : Buffer.from(String(init.body), 'utf8');
+      headers['Content-Length'] = String(payload.length);
+    }
+    const timeoutMs = Number(init.timeout) || GH_TIMEOUT_MS;
+    let settled = false;
+    const req = lib.request(target, { method, headers }, (res) => {
+      const status = res.statusCode || 0;
+      if ([301, 302, 303, 307, 308].includes(status) && res.headers.location && redirectsLeft > 0) {
+        res.resume();
+        clearTimeout(timer);
+        settled = true;
+        const next = new URL(res.headers.location, target);
+        const nextInit = Object.assign({}, init, { headers: Object.assign({}, headers) });
+        delete nextInit.headers['Content-Length'];
+        if (next.host !== target.host) {
+          for (const k of Object.keys(nextInit.headers)) if (k.toLowerCase() === 'authorization') delete nextInit.headers[k];
+        }
+        if (status === 303 || ((status === 301 || status === 302) && method === 'POST')) {
+          nextInit.method = 'GET';
+          delete nextInit.body;
+        }
+        return resolve(httpFetch(next.toString(), nextInit, redirectsLeft - 1));
+      }
+      clearTimeout(timer);
+      settled = true;
+      // Body idle timeout: a stalled download is cut after 60 s of silence.
+      res.setTimeout(Math.max(timeoutMs, 60000), () => res.destroy(new Error('Response body timed out')));
+      let consumed = null;
+      const readAll = () => {
+        if (!consumed) {
+          consumed = new Promise((ok, bad) => {
+            const chunks = [];
+            res.on('data', (d) => chunks.push(Buffer.from(d)));
+            res.on('end', () => ok(Buffer.concat(chunks)));
+            res.on('error', bad);
+          });
+        }
+        return consumed;
+      };
+      resolve({
+        ok: status >= 200 && status < 300,
+        status,
+        url: target.toString(),
+        headers: { get: (name) => {
+          const v = res.headers[String(name).toLowerCase()];
+          return v === undefined ? null : Array.isArray(v) ? v.join(', ') : String(v);
+        } },
+        body: res,
+        text: async () => (await readAll()).toString('utf8'),
+        json: async () => JSON.parse((await readAll()).toString('utf8')),
+        arrayBuffer: async () => { const b = await readAll(); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); },
+      });
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const err = new Error(`Request timed out after ${timeoutMs / 1000}s`);
+      err.name = 'TimeoutError';
+      err.code = 'ETIMEDOUT';
+      req.destroy(err);
+      reject(err);
+    }, timeoutMs);
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /* Small utilities                                                     */
@@ -547,16 +666,16 @@ async function ghRequest(apiPath, opts = {}) {
     const cached = ghCache.get(url);
     if (cached && cached.etag) headers['If-None-Match'] = cached.etag;
   }
-  const init = { method, headers, signal: AbortSignal.timeout(opts.timeout || GH_TIMEOUT_MS) };
+  const init = { method, headers, timeout: opts.timeout || GH_TIMEOUT_MS };
   if (opts.body !== undefined) {
     init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
     headers['Content-Type'] = 'application/json';
   }
   let res;
   try {
-    res = await fetch(url, init);
+    res = await httpFetch(url, init);
   } catch (err) {
-    if (err && err.name === 'TimeoutError') throw new GhError(504, `GitHub request timed out (${method} ${apiPath})`);
+    if (err && (err.name === 'TimeoutError' || err.code === 'ETIMEDOUT')) throw new GhError(504, `GitHub request timed out (${method} ${apiPath})`);
     throw new GhError(502, `Could not reach GitHub: ${err.message}`);
   }
   noteRateLimit(res.headers);
@@ -964,7 +1083,7 @@ function runGitIn(cwd, args, options = {}) {
         cwd,
         windowsHide: true,
         shell: false,
-        env: gitEnv(),
+        env: Object.assign(gitEnv(), options.env || {}),
       });
     } catch (err) {
       return reject(new Error(`Could not start git: ${err.message}`));
@@ -982,7 +1101,13 @@ function runGitIn(cwd, args, options = {}) {
     }, options.timeout || GIT_TIMEOUT_MS);
 
     child.stdout.on('data', (d) => { out += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { err += d.toString('utf8'); });
+    child.stderr.on('data', (d) => {
+      const text = d.toString('utf8');
+      err += text;
+      if (typeof options.onStderr === 'function') {
+        try { options.onStderr(text); } catch (_) {}
+      }
+    });
 
     child.on('error', (e) => {
       if (finished) return;
@@ -1199,15 +1324,238 @@ function parseNumstat(raw) {
   return out;
 }
 
+/* ------------------------------------------------------------------ */
+/* v3.1.0 — extended pull / push                                       */
+/* ------------------------------------------------------------------ */
+/* - GitHub HTTPS remotes reuse the token you signed in with (a        */
+/*   one-shot credential helper; the token is passed via env, never    */
+/*   on the command line, never logged).                               */
+/* - Live progress lines are broadcast over SSE as `git-progress`.     */
+/* - Every pull/push/sync/undo is recorded in an in-memory history.    */
+
+const PROGRESS_RE = /^(remote: )?(Enumerating|Counting|Compressing|Receiving|Resolving|Writing|Total|Unpacking|Updating files|Checking out|Delta compression|Finding sources)\b/;
+const MAX_HISTORY = 50;
+const MAX_COMMIT_LIST = 50;
+const syncHistory = [];
+let lastPull = null; // { oldSha, newSha, branch, at } — enables "Undo last pull"
+
+function cleanGitOutput(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => line.split('\r').pop())
+    .filter((line) => line.trim() && !PROGRESS_RE.test(line.trim()))
+    .join('\n')
+    .trim();
+}
+
+function recordHistory(entry) {
+  syncHistory.unshift(Object.assign({ at: new Date().toISOString() }, entry));
+  if (syncHistory.length > MAX_HISTORY) syncHistory.length = MAX_HISTORY;
+  sseBroadcast('git-history', syncHistory[0]);
+}
+
+function progressReporter(op) {
+  let lastSent = 0;
+  let pending = '';
+  return (chunk) => {
+    pending += chunk;
+    const parts = pending.split(/[\r\n]/);
+    pending = parts.pop();
+    const line = parts.filter((p) => p.trim()).pop();
+    if (!line) return;
+    const now = Date.now();
+    if (now - lastSent < 150 && !/100%|done/.test(line)) return;
+    lastSent = now;
+    sseBroadcast('git-progress', { op, line: line.trim(), at: now });
+  };
+}
+
+async function rawRemoteUrl(remote) {
+  try {
+    return (await runGit(['config', '--get', `remote.${remote}.url`])).trim() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function githubHosts() {
+  const hosts = new Set(['github.com']);
+  try { hosts.add(new URL(GITHUB_OAUTH_BASE).host); } catch (_) {}
+  return hosts;
+}
+
 /**
- * Pull from a remote. Returns a structured result; a merge conflict is
- * NOT an exception — it is { ok: false, conflict: true, conflicts } so
- * the UI can show the conflicted files and offer ours/theirs.
+ * When the remote is an https:// GitHub URL and the user is signed in,
+ * return extra `-c` args + env so git authenticates with that token.
+ * `credential.helper=` (empty) first clears any other helper so no GUI
+ * credential prompt can pop up and hang the bridge.
+ */
+async function githubAuthFor(remote, enabled) {
+  if (enabled === false || !ghConfig.token) return { args: [], env: {}, used: false };
+  const url = await rawRemoteUrl(remote);
+  if (!url || !/^https:\/\//i.test(url)) return { args: [], env: {}, used: false };
+  let host = '';
+  try { host = new URL(url).host; } catch (_) { return { args: [], env: {}, used: false }; }
+  if (!githubHosts().has(host)) return { args: [], env: {}, used: false };
+  return {
+    args: [
+      '-c', 'credential.helper=',
+      '-c', 'credential.helper=!f() { echo username=x-access-token; echo "password=$BRIDGE_GIT_TOKEN"; }; f',
+    ],
+    env: { BRIDGE_GIT_TOKEN: ghConfig.token },
+    used: true,
+  };
+}
+
+async function gitPath(name) {
+  const rel = (await runGit(['rev-parse', '--git-path', name])).trim();
+  return path.isAbsolute(rel) ? rel : path.join(repoPath, rel);
+}
+
+/** Which multi-step operation (if any) is waiting for the user. */
+async function operationState() {
+  if (!repoPath) return { state: null, conflicts: [] };
+  let state = null;
+  try {
+    if (fs.existsSync(await gitPath('rebase-merge')) || fs.existsSync(await gitPath('rebase-apply'))) state = 'rebase';
+    else if (fs.existsSync(await gitPath('MERGE_HEAD'))) state = 'merge';
+    else if (fs.existsSync(await gitPath('CHERRY_PICK_HEAD'))) state = 'cherry-pick';
+    else if (fs.existsSync(await gitPath('REVERT_HEAD'))) state = 'revert';
+  } catch (_) { state = null; }
+  return { state, conflicts: state ? await conflictedFiles() : [] };
+}
+
+const OPERATION_HINT = {
+  rebase: 'Đang rebase dở — xử lý conflict rồi bấm "Rebase: Continue", hoặc "Rebase: Abort" để huỷ.',
+  merge: 'Đang merge dở — xử lý conflict rồi Commit merge, hoặc "Abort merge" để huỷ.',
+  'cherry-pick': 'Đang cherry-pick dở — xử lý conflict rồi commit, hoặc dùng git cherry-pick --abort.',
+  revert: 'Đang revert dở — xử lý conflict rồi commit, hoặc dùng git revert --abort.',
+};
+
+async function assertNoOperation(what) {
+  const op = await operationState();
+  if (op.state) {
+    throw fail('OPERATION_IN_PROGRESS', `Cannot ${what}: a ${op.state} is in progress. ${OPERATION_HINT[op.state]}`);
+  }
+}
+
+function parseCommitLines(raw) {
+  const out = [];
+  for (const line of String(raw || '').split('\n')) {
+    if (!line.trim()) continue;
+    const [sha, author, date, ...subject] = line.split('\x1f');
+    out.push({ sha, short: sha.slice(0, 7), author, date, subject: subject.join('\x1f') });
+  }
+  return out;
+}
+
+async function commitList(range, limit = MAX_COMMIT_LIST) {
+  try {
+    return parseCommitLines(await runGit(['log', `--max-count=${limit}`, '--format=%H%x1f%an%x1f%aI%x1f%s', range]));
+  } catch (_) {
+    return [];
+  }
+}
+
+async function countRange(range) {
+  try { return Number((await runGit(['rev-list', '--count', range])).trim()) || 0; } catch (_) { return 0; }
+}
+
+async function diffStats(range) {
+  try {
+    const files = parseNumstat(await runGit(['diff', '--numstat', range]));
+    return {
+      files,
+      fileCount: files.length,
+      insertions: files.reduce((n, f) => n + (f.insertions || 0), 0),
+      deletions: files.reduce((n, f) => n + (f.deletions || 0), 0),
+    };
+  } catch (_) {
+    return { files: [], fileCount: 0, insertions: 0, deletions: 0 };
+  }
+}
+
+async function dirtyFiles() {
+  try {
+    return parseStatus(await runGit(['status', '--porcelain=v1', '-z', '-uall'])).map((f) => f.path);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function refSha(ref) {
+  try { return (await runGit(['rev-parse', '--verify', '-q', `${ref}^{commit}`])).trim() || null; } catch (_) { return null; }
+}
+
+/* Classify a failed push/pull so the UI can say WHY and what to do. */
+function classifyGitFailure(text) {
+  const t = String(text || '');
+  if (/\[rejected\].*\(fetch first\)|non-fast-forward|\(stale info\)|Updates were rejected/i.test(t)) {
+    if (/stale info/i.test(t)) return { reason: 'stale-lease', hint: 'Remote đã thay đổi kể từ lần fetch cuối — force-with-lease đã chặn để bảo vệ commit của người khác. Fetch/Pull trước rồi thử lại.' };
+    return { reason: 'non-fast-forward', hint: 'Remote có commit mới mà máy bạn chưa có. Pull (hoặc Sync) trước rồi Push lại. Chỉ dùng force-push khi chắc chắn muốn ghi đè.' };
+  }
+  if (/GH006|protected branch/i.test(t)) return { reason: 'protected-branch', hint: 'Branch này được bảo vệ trên GitHub — hãy push lên branch khác rồi tạo Pull Request.' };
+  if (/GH013|push declined due to repository rule|secret scanning|push protection/i.test(t)) return { reason: 'repository-rule', hint: 'GitHub chặn push do rule của repo (ví dụ phát hiện secret). Xem chi tiết trong output.' };
+  if (/Authentication failed|could not read Username|terminal prompts disabled|Invalid username or password|403|Permission to .* denied/i.test(t)) return { reason: 'auth', hint: 'Không xác thực được với remote. Đăng nhập GitHub trong dashboard (bridge sẽ tự dùng token cho remote https://github.com), hoặc cấu hình SSH key / credential helper.' };
+  if (/Could not resolve host|unable to access|Connection timed out|Failed to connect/i.test(t)) return { reason: 'network', hint: 'Không kết nối được tới remote — kiểm tra mạng / proxy rồi thử lại.' };
+  if (/does not appear to be a git repository|No such remote|repository .* not found/i.test(t)) return { reason: 'no-remote', hint: 'Remote không tồn tại hoặc sai URL — kiểm tra panel Remotes.' };
+  if (/src refspec .* does not match any/i.test(t)) return { reason: 'no-local-branch', hint: 'Branch local chưa có commit nào hoặc tên branch sai.' };
+  if (/hook declined|pre-push hook/i.test(t)) return { reason: 'hook', hint: 'Hook pre-push đã chặn. Sửa lỗi hook báo, hoặc tích "Bỏ qua hook (--no-verify)".' };
+  if (/Your local changes to the following files would be overwritten|Please commit your changes or stash them/i.test(t)) return { reason: 'dirty-tree', hint: 'Có thay đổi chưa commit bị đè. Commit/stash trước, hoặc tích "Autostash".' };
+  if (/Not possible to fast-forward|fatal: Not possible to fast-forward/i.test(t)) return { reason: 'not-fast-forward', hint: 'Không fast-forward được vì 2 bên đã rẽ nhánh — chọn Merge hoặc Rebase.' };
+  if (/refusing to merge unrelated histories/i.test(t)) return { reason: 'unrelated-histories', hint: 'Hai lịch sử không liên quan — tích "Cho phép lịch sử không liên quan" nếu chắc chắn.' };
+  if (/timed out/i.test(t)) return { reason: 'timeout', hint: 'Lệnh git chạy quá lâu và đã bị dừng. Thử lại hoặc kiểm tra mạng.' };
+  return { reason: 'unknown', hint: null };
+}
+
+function failWithDetails(err, extra) {
+  const text = `${err.message || ''}\n${err.gitStderr || ''}`;
+  const cls = classifyGitFailure(text);
+  const e = new Error(cleanGitOutput(err.message) + (cls.hint ? `\n→ ${cls.hint}` : ''));
+  e.code = err.code || ('GIT_' + cls.reason.toUpperCase().replace(/-/g, '_'));
+  e.details = Object.assign({ reason: cls.reason, hint: cls.hint }, extra || {});
+  return e;
+}
+
+/* Porcelain push output: "<flag>\t<from>:<to>\t<summary>" */
+const PUSH_FLAGS = { ' ': 'fast-forward', '+': 'forced', '-': 'deleted', '*': 'new', '!': 'rejected', '=': 'up-to-date' };
+function parsePushPorcelain(text) {
+  const refs = [];
+  let remoteUrlSeen = null;
+  for (const line of String(text || '').split('\n')) {
+    const to = line.match(/^To (.+)$/);
+    if (to) { remoteUrlSeen = to[1].trim(); continue; }
+    const m = line.match(/^([ +\-*!=])\t([^\t]*)\t(.*)$/);
+    if (!m) continue;
+    const [from, dest] = m[2].split(':');
+    refs.push({ flag: m[1], status: PUSH_FLAGS[m[1]] || 'unknown', from: from || null, to: dest || null, summary: m[3].trim() });
+  }
+  return { refs, url: remoteUrlSeen };
+}
+
+function validatePushOption(value) {
+  const v = String(value || '');
+  if (!v || /[\n\r\0]/.test(v) || v.length > 200) throw new Error('Invalid push option');
+  return v;
+}
+
+/**
+ * Pull from a remote. Returns a structured result; a merge/rebase
+ * conflict is NOT an exception — it is { ok: false, conflict: true,
+ * conflicts } so the UI can offer ours/theirs or rebase continue/abort.
+ *
+ * opts: mode (merge | rebase | rebase-merges | ff-only), remote, branch,
+ *       autostash, prune, tags, noTags, squash, noCommit,
+ *       strategyOption (ours | theirs | patience | ignore-space-change),
+ *       allowUnrelated, recurseSubmodules, unshallow, depth,
+ *       useGithubAuth (default true), progress (default true)
  */
 async function pullRepo(opts = {}) {
-  const mode = ['merge', 'rebase', 'ff-only'].includes(opts.mode) ? opts.mode : 'merge';
+  const MODES = ['merge', 'rebase', 'rebase-merges', 'ff-only'];
+  const mode = MODES.includes(opts.mode) ? opts.mode : 'merge';
   const remote = validateRemoteName(opts.remote || 'origin');
   const branch = opts.branch ? validateBranchName(opts.branch) : null;
+  await assertNoOperation('pull');
   const current = await currentBranch();
   if (!current || current.startsWith('(')) throw new Error('Cannot pull: no branch checked out');
   const targetBranch = branch || current;
@@ -1216,85 +1564,362 @@ async function pullRepo(opts = {}) {
 
   const args = ['pull'];
   if (mode === 'rebase') args.push('--rebase');
+  else if (mode === 'rebase-merges') args.push('--rebase=merges');
   else if (mode === 'ff-only') args.push('--ff-only');
   else args.push('--no-rebase'); // merge mode: say so explicitly, or git
   // refuses divergent branches ("need to specify how to reconcile them").
+  if (opts.autostash) args.push('--autostash');
+  if (opts.prune) args.push('--prune');
+  if (opts.tags && !opts.noTags) args.push('--tags');
+  if (opts.noTags) args.push('--no-tags');
+  if (mode === 'merge') {
+    if (opts.squash) args.push('--squash');
+    if (opts.noCommit) args.push('--no-commit');
+    if (opts.allowUnrelated) args.push('--allow-unrelated-histories');
+  }
+  if (opts.strategyOption) {
+    const so = String(opts.strategyOption);
+    if (!['ours', 'theirs', 'patience', 'ignore-space-change', 'ignore-all-space'].includes(so)) {
+      throw new Error('strategyOption must be ours, theirs, patience, ignore-space-change or ignore-all-space');
+    }
+    args.push('-X', so);
+  }
+  if (opts.recurseSubmodules) args.push('--recurse-submodules');
+  if (opts.unshallow) {
+    try {
+      if ((await runGit(['rev-parse', '--is-shallow-repository'])).trim() === 'true') args.push('--unshallow');
+    } catch (_) {}
+  } else if (opts.depth) {
+    const d = Number(opts.depth);
+    if (!Number.isInteger(d) || d < 1 || d > 100000) throw new Error('depth must be a positive integer');
+    args.push(`--depth=${d}`);
+  }
+  if (opts.progress !== false) args.push('--progress');
   // Plain `git pull` uses the configured upstream; an explicit branch
   // (or a branch without upstream) needs remote + branch on the command.
   if (!upstream || branch) args.push(remote, targetBranch);
 
+  const auth = await githubAuthFor(remote, opts.useGithubAuth);
+  const gitOpts = { env: auth.env };
+  if (opts.progress !== false) gitOpts.onStderr = progressReporter('pull');
+
   let result;
   try {
-    result = await runGit(args);
+    result = await runGit(auth.args.concat(args), gitOpts);
   } catch (err) {
     const text = `${err.message || ''} ${err.gitStderr || ''}`;
-    if (/CONFLICT/i.test(text) || /Automatic merge failed/i.test(text)) {
+    if (/CONFLICT/i.test(text) || /Automatic merge failed/i.test(text) || /could not apply/i.test(text)) {
       const conflicts = await conflictedFiles();
-      return {
+      const op = await operationState();
+      const entry = {
         ok: false, conflict: true, conflicts, mode, remote, branch: targetBranch,
-        result: text.trim(),
+        operation: op.state, hint: OPERATION_HINT[op.state] || null,
+        autostashConflict: /conflicts in your autostash|Applying autostash resulted in conflicts/i.test(text),
+        result: cleanGitOutput(text), usedGithubAuth: auth.used,
       };
+      recordHistory({ type: 'pull', ok: false, conflict: true, mode, remote, branch: targetBranch, conflicts: conflicts.length });
+      return entry;
     }
-    throw err;
+    recordHistory({ type: 'pull', ok: false, mode, remote, branch: targetBranch, error: cleanGitOutput(err.message).split('\n')[0] });
+    throw failWithDetails(err, { mode, remote, branch: targetBranch });
   }
 
   const newSha = await headSha();
   let changedFiles = [];
   let commitsPulled = 0;
   let mergeCommits = 0;
+  let stats = { files: [], fileCount: 0, insertions: 0, deletions: 0 };
   if (oldSha && newSha && oldSha !== newSha) {
     changedFiles = (await runGit(['diff', '--name-only', `${oldSha}..${newSha}`])).split('\n').map((s) => s.trim()).filter(Boolean);
     mergeCommits = Number((await runGit(['rev-list', '--count', '--merges', `${oldSha}..${newSha}`])).trim()) || 0;
+    stats = await diffStats(`${oldSha}..${newSha}`);
   }
   // "Commits pulled" = commits that arrived from the remote in this
   // pull, measured as old HEAD .. FETCH_HEAD (the head just fetched).
-  // Counting old..new instead would also count the merge commit itself
-  // and, after a rebase, the rewritten local commit — and the
-  // remote-tracking ref is unreliable here because a failed earlier
-  // pull (e.g. --ff-only on diverged branches) already advanced it.
   let fetchHeadSha = null;
   try {
     fetchHeadSha = (await runGit(['rev-parse', 'FETCH_HEAD'])).trim() || null;
   } catch (_) { fetchHeadSha = null; }
+  let commits = [];
   if (oldSha && fetchHeadSha) {
-    commitsPulled = Number((await runGit(['rev-list', '--count', `${oldSha}..${fetchHeadSha}`])).trim()) || 0;
+    commitsPulled = await countRange(`${oldSha}..${fetchHeadSha}`);
+    commits = await commitList(`${oldSha}..${fetchHeadSha}`);
   } else if (fetchHeadSha) {
-    commitsPulled = Number((await runGit(['rev-list', '--count', fetchHeadSha])).trim()) || 0;
+    commitsPulled = await countRange(fetchHeadSha);
+    commits = await commitList(fetchHeadSha);
   }
+  // Squash / no-commit leave the result staged but uncommitted.
+  const pendingCommit = !!(opts.squash || opts.noCommit) && mode === 'merge';
+  if (oldSha && newSha && oldSha !== newSha) {
+    lastPull = { oldSha, newSha, branch: current, at: new Date().toISOString() };
+  }
+  recordHistory({ type: 'pull', ok: true, mode, remote, branch: targetBranch, commits: commitsPulled, files: changedFiles.length, insertions: stats.insertions, deletions: stats.deletions, from: oldSha, to: newSha });
   return {
     ok: true, conflict: false, mode, remote, branch: targetBranch,
-    result: (result || '').trim(), changedFiles, commitsPulled,
-    fastForward: commitsPulled > 0 && mergeCommits === 0, newSha,
+    result: cleanGitOutput(result), changedFiles, commitsPulled, commits,
+    stats: { fileCount: stats.fileCount, insertions: stats.insertions, deletions: stats.deletions, files: stats.files.slice(0, 200) },
+    fastForward: commitsPulled > 0 && mergeCommits === 0, newSha, previousSha: oldSha,
+    upToDate: oldSha === newSha && !pendingCommit,
+    pendingCommit,
+    undoAvailable: !!(lastPull && lastPull.newSha === newSha),
+    usedGithubAuth: auth.used,
   };
 }
 
 /**
  * Push to a remote. Force push is --force-with-lease ONLY, and only
- * when the caller passes confirm=true (the UI shows a checkbox for
- * this). Plain --force is never used.
+ * when the caller passes confirm=true. Plain --force is never used.
+ *
+ * opts: remote, remotes[] (push to several), branch, remoteBranch
+ *       (push local → different remote name), upTo (push only up to a
+ *       commit), setUpstream, force + confirm, forceIfIncludes,
+ *       leaseSha (expected remote sha), pushAll, tags, followTags,
+ *       noVerify, atomic, dryRun, pushOptions[], useGithubAuth, progress
  */
 async function pushRepo(opts = {}) {
+  if (Array.isArray(opts.remotes) && opts.remotes.length) {
+    const names = Array.from(new Set(opts.remotes.map((r) => validateRemoteName(r)))).slice(0, 10);
+    const results = [];
+    for (const name of names) {
+      try {
+        results.push(await pushRepo(Object.assign({}, opts, { remotes: null, remote: name })));
+      } catch (err) {
+        results.push({ ok: false, remote: name, error: err.message, reason: (err.details || {}).reason || 'unknown', hint: (err.details || {}).hint || null });
+      }
+    }
+    const ok = results.every((r) => r.ok);
+    return { ok, multi: true, results, pushed: results.some((r) => r.ok), remote: names.join(', '), branch: results[0] && results[0].branch, result: results.map((r) => `${r.remote}: ${r.ok ? 'OK' : 'FAILED — ' + r.error}`).join('\n') };
+  }
   const remote = validateRemoteName(opts.remote || 'origin');
   const branch = opts.branch ? validateBranchName(opts.branch) : null;
+  const remoteBranch = opts.remoteBranch ? validateBranchName(opts.remoteBranch) : null;
+  await assertNoOperation('push');
   const current = await currentBranch();
   if (!current || current.startsWith('(')) throw new Error('Cannot push: no branch checked out');
   const targetBranch = branch || current;
+  const destBranch = remoteBranch || targetBranch;
   if (opts.force && opts.confirm !== true) {
     throw new Error('Force push needs explicit confirmation. Tick the "force-push with lease" confirmation and try again.');
   }
-  const args = ['push'];
-  if (opts.force) args.push('--force-with-lease');
+  const args = ['push', '--porcelain'];
+  if (opts.progress !== false) args.push('--progress');
+  if (opts.dryRun) args.push('--dry-run');
+  if (opts.noVerify) args.push('--no-verify');
+  if (opts.atomic) args.push('--atomic');
+  if (opts.followTags) args.push('--follow-tags');
+  for (const po of (Array.isArray(opts.pushOptions) ? opts.pushOptions : []).slice(0, 10)) {
+    args.push('-o', validatePushOption(po));
+  }
+  if (opts.force) {
+    if (opts.leaseSha) args.push(`--force-with-lease=refs/heads/${destBranch}:${validateSha(opts.leaseSha)}`);
+    else args.push('--force-with-lease');
+    if (opts.forceIfIncludes) args.push('--force-if-includes');
+  }
+  let mode = 'branch';
   if (opts.pushAll) {
+    mode = 'all';
     args.push(remote, '--all');
   } else if (opts.tags) {
+    mode = 'tags';
     args.push(remote, '--tags');
   } else {
     const upstream = await upstreamOf(current);
-    if (opts.setUpstream || !upstream) args.push('-u', remote, targetBranch);
-    else args.push(remote, targetBranch);
+    const wantUpstream = (opts.setUpstream || !upstream) && !opts.upTo && !opts.dryRun && targetBranch === current;
+    if (wantUpstream) args.push('-u');
+    let src = targetBranch;
+    if (opts.upTo) {
+      mode = 'up-to';
+      const sha = validateSha(opts.upTo);
+      const full = await refSha(sha);
+      if (!full) throw new Error(`Commit ${sha} not found`);
+      // The commit must be on the branch being pushed.
+      try { await runGit(['merge-base', '--is-ancestor', full, targetBranch]); } catch (_) {
+        throw new Error(`Commit ${sha} is not on branch ${targetBranch}`);
+      }
+      src = full;
+    }
+    args.push(remote, (src === destBranch && !opts.upTo) ? src : `${src}:refs/heads/${destBranch}`);
   }
-  const result = await runGit(args);
-  return { ok: true, remote, branch: targetBranch, result: (result || '').trim(), pushed: true };
+
+  const auth = await githubAuthFor(remote, opts.useGithubAuth);
+  const gitOpts = { env: auth.env };
+  if (opts.progress !== false) gitOpts.onStderr = progressReporter('push');
+  const aheadBefore = mode === 'branch' || mode === 'up-to' ? await aheadBehind().catch(() => null) : null;
+  let result;
+  try {
+    result = await runGit(auth.args.concat(args), gitOpts);
+  } catch (err) {
+    const parsed = parsePushPorcelain(err.message);
+    recordHistory({ type: 'push', ok: false, remote, branch: targetBranch, remoteBranch: destBranch, dryRun: !!opts.dryRun, error: cleanGitOutput(err.message).split('\n').filter((l) => !/^\S\t|^To |^Done$/.test(l))[0] || 'push failed' });
+    throw failWithDetails(err, { remote, branch: targetBranch, remoteBranch: destBranch, refs: parsed.refs, rejected: parsed.refs.some((r) => r.flag === '!') });
+  }
+  const parsed = parsePushPorcelain(result);
+  const pushedCommits = aheadBefore && aheadBefore.hasUpstream && !remoteBranch ? aheadBefore.ahead : null;
+  recordHistory({ type: 'push', ok: true, remote, branch: targetBranch, remoteBranch: destBranch, mode, dryRun: !!opts.dryRun, force: !!opts.force, refs: parsed.refs.length, commits: pushedCommits });
+  return {
+    ok: true, remote, branch: targetBranch, remoteBranch: destBranch, mode,
+    result: cleanGitOutput(result).split('\n').filter((l) => l !== 'Done').join('\n'),
+    refs: parsed.refs, url: parsed.url,
+    pushed: !opts.dryRun, dryRun: !!opts.dryRun, forced: parsed.refs.some((r) => r.flag === '+'),
+    upToDate: parsed.refs.length > 0 && parsed.refs.every((r) => r.flag === '='),
+    commitsPushed: pushedCommits, usedGithubAuth: auth.used,
+  };
+}
+
+/** What would a pull bring in? Fetches, but never touches the working tree. */
+async function pullPreview(opts = {}) {
+  const remote = validateRemoteName(opts.remote || 'origin');
+  const current = await currentBranch();
+  if (!current || current.startsWith('(')) throw new Error('Cannot preview: no branch checked out');
+  const upstream = await upstreamOf(current);
+  let targetBranch = opts.branch ? validateBranchName(opts.branch) : null;
+  if (!targetBranch) {
+    targetBranch = upstream && upstream.startsWith(remote + '/') ? upstream.slice(remote.length + 1) : current;
+  }
+  const auth = await githubAuthFor(remote, opts.useGithubAuth);
+  try {
+    await runGit(auth.args.concat(['fetch', '--progress', remote, targetBranch]), { env: auth.env, onStderr: progressReporter('fetch') });
+  } catch (err) {
+    throw failWithDetails(err, { remote, branch: targetBranch });
+  }
+  const fetched = await refSha('FETCH_HEAD');
+  const head = await headSha();
+  if (!fetched) throw new Error('Nothing was fetched');
+  const incomingCount = head ? await countRange(`HEAD..${fetched}`) : await countRange(fetched);
+  const outgoingCount = head ? await countRange(`${fetched}..HEAD`) : 0;
+  const incoming = head ? await commitList(`HEAD..${fetched}`) : await commitList(fetched);
+  const stats = head ? await diffStats(`HEAD...${fetched}`) : { files: [], fileCount: 0, insertions: 0, deletions: 0 };
+  const dirty = await dirtyFiles();
+  const incomingPaths = new Set(stats.files.map((f) => f.path));
+  const overlap = dirty.filter((p) => incomingPaths.has(p));
+  // Files changed on BOTH sides since the merge base = likely conflicts.
+  let possibleConflicts = [];
+  if (head && incomingCount && outgoingCount) {
+    try {
+      const base = (await runGit(['merge-base', 'HEAD', fetched])).trim();
+      const ours = new Set((await runGit(['diff', '--name-only', `${base}..HEAD`])).split('\n').filter(Boolean));
+      possibleConflicts = Array.from(incomingPaths).filter((p) => ours.has(p));
+    } catch (_) {}
+  }
+  return {
+    ok: true, remote, branch: targetBranch, current, remoteSha: fetched, localSha: head,
+    upToDate: incomingCount === 0,
+    incomingCount, outgoingCount, incoming,
+    canFastForward: incomingCount > 0 && outgoingCount === 0,
+    diverged: incomingCount > 0 && outgoingCount > 0,
+    stats: { fileCount: stats.fileCount, insertions: stats.insertions, deletions: stats.deletions, files: stats.files.slice(0, 200) },
+    dirtyFiles: dirty.length, dirtyOverlap: overlap, possibleConflicts,
+    suggestion: incomingCount === 0 ? 'Đã cập nhật — không có gì để pull.'
+      : overlap.length ? 'Có file đang sửa trùng với thay đổi từ remote — bật Autostash hoặc commit trước khi pull.'
+      : outgoingCount === 0 ? 'Pull sẽ fast-forward, không tạo merge commit.'
+      : possibleConflicts.length ? `Hai bên đã rẽ nhánh và cùng sửa ${possibleConflicts.length} file — có thể conflict. Cân nhắc Rebase hoặc Merge cẩn thận.`
+      : 'Hai bên đã rẽ nhánh — Merge sẽ tạo merge commit, Rebase sẽ đặt commit của bạn lên trên.',
+    usedGithubAuth: auth.used,
+  };
+}
+
+/** What would a push send? Fetches the remote branch to compare. */
+async function pushPreview(opts = {}) {
+  const remote = validateRemoteName(opts.remote || 'origin');
+  const current = await currentBranch();
+  if (!current || current.startsWith('(')) throw new Error('Cannot preview: no branch checked out');
+  const branch = opts.branch ? validateBranchName(opts.branch) : current;
+  const destBranch = opts.remoteBranch ? validateBranchName(opts.remoteBranch) : branch;
+  const auth = await githubAuthFor(remote, opts.useGithubAuth);
+  let remoteExists = true;
+  try {
+    await runGit(auth.args.concat(['fetch', '--progress', remote, destBranch]), { env: auth.env, onStderr: progressReporter('fetch') });
+  } catch (err) {
+    const text = `${err.message} ${err.gitStderr || ''}`;
+    if (/couldn't find remote ref|not our ref|no such ref/i.test(text)) remoteExists = false;
+    else throw failWithDetails(err, { remote, branch });
+  }
+  const local = await refSha(branch);
+  if (!local) throw new Error(`Branch ${branch} has no commits`);
+  const remoteSha = remoteExists ? await refSha('FETCH_HEAD') : null;
+  const range = remoteSha ? `${remoteSha}..${local}` : local;
+  const outgoingCount = await countRange(range);
+  const outgoing = await commitList(range);
+  const behindCount = remoteSha ? await countRange(`${local}..${remoteSha}`) : 0;
+  const stats = remoteSha ? await diffStats(`${remoteSha}...${local}`) : { files: [], fileCount: 0, insertions: 0, deletions: 0 };
+  const unpushedTags = [];
+  try {
+    const localTags = (await runGit(['tag', '--points-at', local])).split('\n').filter(Boolean);
+    unpushedTags.push(...localTags);
+  } catch (_) {}
+  return {
+    ok: true, remote, branch, remoteBranch: destBranch, localSha: local, remoteSha,
+    remoteBranchExists: remoteExists, newBranch: !remoteExists,
+    outgoingCount, outgoing, behindCount,
+    willBeRejected: behindCount > 0,
+    upToDate: remoteExists && outgoingCount === 0,
+    stats: { fileCount: stats.fileCount, insertions: stats.insertions, deletions: stats.deletions, files: stats.files.slice(0, 200) },
+    tagsOnHead: unpushedTags,
+    suggestion: !remoteExists ? `Branch "${destBranch}" chưa có trên ${remote} — Push sẽ tạo branch mới (nên tích Set upstream).`
+      : outgoingCount === 0 && behindCount === 0 ? 'Đã đồng bộ — không có gì để push.'
+      : behindCount > 0 ? `Remote có ${behindCount} commit bạn chưa có — push thường sẽ bị từ chối. Pull/Sync trước, hoặc force-with-lease nếu chắc chắn.`
+      : `Sẽ push ${outgoingCount} commit (fast-forward).`,
+    usedGithubAuth: auth.used,
+  };
+}
+
+/** Fast-forward every local branch that only lags its upstream. */
+async function pullAllBranches(opts = {}) {
+  const remote = validateRemoteName(opts.remote || 'origin');
+  await assertNoOperation('update branches');
+  const auth = await githubAuthFor(remote, opts.useGithubAuth);
+  try {
+    await runGit(auth.args.concat(['fetch', '--progress', '--prune', remote]), { env: auth.env, onStderr: progressReporter('fetch') });
+  } catch (err) {
+    throw failWithDetails(err, { remote });
+  }
+  const current = await currentBranch();
+  const raw = await runGit(['for-each-ref', '--format=%(refname:short)\x1f%(upstream:short)\x1f%(objectname)', 'refs/heads']);
+  const results = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const [name, up, sha] = line.split('\x1f');
+    if (!up) { results.push({ branch: name, status: 'no-upstream' }); continue; }
+    if (!up.startsWith(remote + '/')) { results.push({ branch: name, upstream: up, status: 'other-remote' }); continue; }
+    const upSha = await refSha(up);
+    if (!upSha) { results.push({ branch: name, upstream: up, status: 'upstream-gone' }); continue; }
+    const behind = await countRange(`${sha}..${upSha}`);
+    const ahead = await countRange(`${upSha}..${sha}`);
+    if (!behind) { results.push({ branch: name, upstream: up, status: ahead ? 'ahead' : 'up-to-date', ahead, behind }); continue; }
+    if (ahead) { results.push({ branch: name, upstream: up, status: 'diverged', ahead, behind }); continue; }
+    try {
+      if (name === current) {
+        await runGit(['merge', '--ff-only', upSha]);
+      } else {
+        // Atomic compare-and-swap: only moves the ref if it is still `sha`.
+        await runGit(['update-ref', '-m', `bridge: fast-forward from ${up}`, `refs/heads/${name}`, upSha, sha]);
+      }
+      results.push({ branch: name, upstream: up, status: 'updated', behind, from: sha, to: upSha });
+    } catch (err) {
+      results.push({ branch: name, upstream: up, status: 'failed', error: cleanGitOutput(err.message).split('\n')[0] });
+    }
+  }
+  const updated = results.filter((r) => r.status === 'updated').length;
+  recordHistory({ type: 'pull-all', ok: true, remote, updated, diverged: results.filter((r) => r.status === 'diverged').length });
+  return { ok: true, remote, results, updated };
+}
+
+/** Put the branch back where it was before the last pull (reset --keep). */
+async function undoLastPull(opts = {}) {
+  if (opts.confirm !== true) throw new Error('Undo pull needs confirm=true.');
+  if (!lastPull) throw new Error('Không có lần pull nào để hoàn tác (bridge chỉ nhớ lần pull gần nhất trong phiên hiện tại).');
+  await assertNoOperation('undo pull');
+  const head = await headSha();
+  const branch = await currentBranch();
+  if (head !== lastPull.newSha || branch !== lastPull.branch) {
+    throw new Error('HEAD đã thay đổi sau lần pull đó (có commit/checkout mới) — không thể hoàn tác an toàn.');
+  }
+  // --keep refuses if it would discard uncommitted changes.
+  await runGit(['reset', '--keep', lastPull.oldSha]);
+  const undone = lastPull;
+  lastPull = null;
+  recordHistory({ type: 'undo-pull', ok: true, branch, from: undone.newSha, to: undone.oldSha });
+  return { ok: true, branch, restoredSha: undone.oldSha, removedSha: undone.newSha };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1477,6 +2102,51 @@ function healthPayload() {
 /* Routes                                                              */
 /* ------------------------------------------------------------------ */
 
+function pullOptionsFrom(body) {
+  const b = body || {};
+  return {
+    mode: b.mode || 'merge',
+    remote: b.remote || 'origin',
+    branch: b.branch || null,
+    autostash: !!b.autostash,
+    prune: !!b.prune,
+    tags: !!b.fetchTags,
+    noTags: !!b.noTags,
+    squash: !!b.squash,
+    noCommit: !!b.noCommit,
+    strategyOption: b.strategyOption || null,
+    allowUnrelated: !!b.allowUnrelated,
+    recurseSubmodules: !!b.recurseSubmodules,
+    unshallow: !!b.unshallow,
+    depth: b.depth || null,
+    useGithubAuth: b.useGithubAuth !== false,
+  };
+}
+
+function pushOptionsFrom(body) {
+  const b = body || {};
+  return {
+    remote: b.remote || 'origin',
+    remotes: Array.isArray(b.remotes) ? b.remotes : null,
+    branch: b.branch || null,
+    remoteBranch: b.remoteBranch || null,
+    upTo: b.upTo || null,
+    setUpstream: !!b.setUpstream,
+    force: !!b.force,
+    confirm: b.confirm === true,
+    forceIfIncludes: !!b.forceIfIncludes,
+    leaseSha: b.leaseSha || null,
+    pushAll: !!b.pushAll,
+    tags: !!b.tags,
+    followTags: !!b.followTags,
+    noVerify: !!b.noVerify,
+    atomic: !!b.atomic,
+    dryRun: !!b.dryRun,
+    pushOptions: Array.isArray(b.pushOptions) ? b.pushOptions : [],
+    useGithubAuth: b.useGithubAuth !== false,
+  };
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   const route = url.pathname;
@@ -1554,11 +2224,11 @@ async function handle(req, res) {
         code,
         redirect_uri: oauthCallbackUrl(),
       });
-      const tokenRes = await fetch(`${GITHUB_OAUTH_BASE}/login/oauth/access_token`, {
+      const tokenRes = await httpFetch(`${GITHUB_OAUTH_BASE}/login/oauth/access_token`, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}` },
         body: params.toString(),
-        signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+        timeout: GH_TIMEOUT_MS,
       });
       const data = safeJsonParse(await tokenRes.text()) || {};
       if (!tokenRes.ok || !data.access_token) {
@@ -1622,11 +2292,11 @@ async function handle(req, res) {
       );
     }
     const params = new URLSearchParams({ client_id: clientId, scope: GH_SCOPES });
-    const res2 = await fetch(`${GITHUB_OAUTH_BASE}/login/device/code`, {
+    const res2 = await httpFetch(`${GITHUB_OAUTH_BASE}/login/device/code`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}` },
       body: params.toString(),
-      signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+      timeout: GH_TIMEOUT_MS,
     });
     const data = safeJsonParse(await res2.text()) || {};
     if (!res2.ok || !data.device_code) throw new Error((data && data.error_description) || 'GitHub Device Flow failed to start');
@@ -1651,11 +2321,11 @@ async function handle(req, res) {
       device_code: deviceCode,
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
     });
-    const res2 = await fetch(`${GITHUB_OAUTH_BASE}/login/oauth/access_token`, {
+    const res2 = await httpFetch(`${GITHUB_OAUTH_BASE}/login/oauth/access_token`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}` },
       body: params.toString(),
-      signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+      timeout: GH_TIMEOUT_MS,
     });
     const data = safeJsonParse(await res2.text()) || {};
     if (data.access_token) {
@@ -1810,7 +2480,7 @@ async function handle(req, res) {
       remaining !== null && remaining <= 5 ? 'Chờ rate limit hồi lại rồi thử lại.' : null);
 
     try {
-      const reach = await fetch(`${GITHUB_OAUTH_BASE}/`, { signal: AbortSignal.timeout(5000) });
+      const reach = await httpFetch(`${GITHUB_OAUTH_BASE}/`, { timeout: 5000 });
       push('reachability', 'Kết nối tới github.com', reach.status < 500,
         `github.com trả về HTTP ${reach.status}.`,
         reach.status < 500 ? null : 'github.com đang lỗi — thử lại sau.');
@@ -1924,9 +2594,9 @@ async function handle(req, res) {
     const zipUrl = `${GITHUB_CODELOAD_BASE}/${owner}/${repo}${zipPath}`;
     let zipRes;
     try {
-      zipRes = await fetch(zipUrl, {
+      zipRes = await httpFetch(zipUrl, {
         headers: { Accept: 'application/octet-stream', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}`, Authorization: `Bearer ${ghConfig.token}` },
-        signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+        timeout: GH_TIMEOUT_MS,
       });
     } catch (err) {
       throw new GhError(502, `Could not reach GitHub: ${err.message}`);
@@ -1944,7 +2614,7 @@ async function handle(req, res) {
       'X-Content-Type-Options': 'nosniff',
     });
     await new Promise((resolve, reject) => {
-      Readable.fromWeb(zipRes.body).on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
+      zipRes.body.on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
     });
     return;
   }
@@ -2253,9 +2923,9 @@ async function handle(req, res) {
       const assetUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/assets/${assetId}`;
       let assetRes;
       try {
-        assetRes = await fetch(assetUrl, {
+        assetRes = await httpFetch(assetUrl, {
           headers: { Accept: 'application/octet-stream', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}`, Authorization: `Bearer ${ghConfig.token}` },
-          signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+          timeout: GH_TIMEOUT_MS,
         });
       } catch (err) {
         throw new GhError(502, `Could not reach GitHub: ${err.message}`);
@@ -2271,7 +2941,7 @@ async function handle(req, res) {
         'X-Content-Type-Options': 'nosniff',
       });
       await new Promise((resolve, reject) => {
-        Readable.fromWeb(assetRes.body).on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
+        assetRes.body.on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
       });
       return;
     }
@@ -2453,61 +3123,137 @@ async function handle(req, res) {
   }
 
   if (route === '/api/git/pull' && req.method === 'POST') {
-    // { mode: 'merge' (default) | 'rebase' | 'ff-only', remote, branch }
-    // A merge conflict returns HTTP 200 with { ok: false, conflict: true,
-    // conflicts } so the UI can offer ours/theirs instead of a bare error.
-    const pulled = await pullRepo({
-      mode: body.mode || 'merge',
-      remote: body.remote || 'origin',
-      branch: body.branch || null,
-    });
+    // v3.1.0 options: mode (merge | rebase | rebase-merges | ff-only),
+    // remote, branch, autostash, prune, tags, noTags, squash, noCommit,
+    // strategyOption, allowUnrelated, recurseSubmodules, unshallow,
+    // depth, useGithubAuth. A conflict returns HTTP 200 { ok:false,
+    // conflict:true, conflicts, operation } so the UI can resolve it.
+    const pulled = await pullRepo(pullOptionsFrom(body));
     return send(req, res, 200, { ok: pulled.ok, ...pulled, ...(await aheadBehind()) });
   }
 
+  if (route === '/api/git/pull/preview' && req.method === 'POST') {
+    return send(req, res, 200, { ...(await pullPreview({ remote: body.remote, branch: body.branch, useGithubAuth: body.useGithubAuth })), ...(await aheadBehind()) });
+  }
+
+  if (route === '/api/git/pull/all-branches' && req.method === 'POST') {
+    return send(req, res, 200, { ...(await pullAllBranches({ remote: body.remote, useGithubAuth: body.useGithubAuth })), ...(await aheadBehind()) });
+  }
+
+  if (route === '/api/git/pull/undo' && req.method === 'POST') {
+    return send(req, res, 200, { ...(await undoLastPull({ confirm: body.confirm === true })), ...(await aheadBehind()) });
+  }
+
+  if (route === '/api/git/pull/last' && req.method === 'GET') {
+    const head = await headSha();
+    return send(req, res, 200, { ok: true, lastPull, undoAvailable: !!(lastPull && lastPull.newSha === head) });
+  }
+
   if (route === '/api/git/push' && req.method === 'POST') {
-    // { remote, branch, setUpstream, force (needs confirm=true), pushAll, tags }
-    const pushed = await pushRepo({
-      remote: body.remote || 'origin',
-      branch: body.branch || null,
-      setUpstream: !!body.setUpstream,
-      force: !!body.force,
-      confirm: body.confirm === true,
-      pushAll: !!body.pushAll,
-      tags: !!body.tags,
-    });
-    return send(req, res, 200, { ok: true, ...pushed, ...(await aheadBehind()) });
+    const pushed = await pushRepo(pushOptionsFrom(body));
+    return send(req, res, 200, { ...pushed, ok: pushed.ok !== false, ...(await aheadBehind()) });
+  }
+
+  if (route === '/api/git/push/preview' && req.method === 'POST') {
+    return send(req, res, 200, await pushPreview({ remote: body.remote, branch: body.branch, remoteBranch: body.remoteBranch, useGithubAuth: body.useGithubAuth }));
+  }
+
+  /* ---- multi-step operations (v3.1.0): rebase continue/abort/skip ---- */
+  if (route === '/api/git/operation' && req.method === 'GET') {
+    const op = await operationState();
+    return send(req, res, 200, { ok: true, ...op, hint: OPERATION_HINT[op.state] || null });
+  }
+
+  const rebaseMatch = route.match(/^\/api\/git\/rebase\/(continue|abort|skip)$/);
+  if (rebaseMatch && req.method === 'POST') {
+    const op = await operationState();
+    if (op.state !== 'rebase') throw new Error('No rebase in progress');
+    const action = rebaseMatch[1];
+    if (action === 'continue' && op.conflicts.length) {
+      throw fail('UNRESOLVED_CONFLICTS', `Còn ${op.conflicts.length} file conflict chưa xử lý: ${op.conflicts.slice(0, 5).join(', ')}. Xử lý (Ours/Theirs hoặc sửa tay rồi Stage) trước khi Continue.`);
+    }
+    let out = '';
+    try {
+      // GIT_EDITOR=true: accept the existing commit message, never open an editor.
+      out = await runGit(['rebase', `--${action}`], { env: { GIT_EDITOR: 'true' } });
+    } catch (err) {
+      const after = await operationState();
+      if (after.state === 'rebase') {
+        recordHistory({ type: `rebase-${action}`, ok: false, conflict: true, conflicts: after.conflicts.length });
+        return send(req, res, 200, { ok: false, conflict: true, operation: 'rebase', conflicts: after.conflicts, result: cleanGitOutput(err.message), hint: OPERATION_HINT.rebase, ...(await aheadBehind()) });
+      }
+      throw err;
+    }
+    const after = await operationState();
+    recordHistory({ type: `rebase-${action}`, ok: true });
+    return send(req, res, 200, { ok: true, operation: after.state, conflicts: after.conflicts, done: after.state !== 'rebase', result: cleanGitOutput(out), ...(await aheadBehind()) });
+  }
+
+  if (route === '/api/git/sync-history' && req.method === 'GET') {
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 20, 1), MAX_HISTORY);
+    return send(req, res, 200, { ok: true, history: syncHistory.slice(0, limit) });
+  }
+
+  if (route === '/api/git/sync-history/clear' && req.method === 'POST') {
+    syncHistory.length = 0;
+    return send(req, res, 200, { ok: true, history: [] });
   }
 
   // One-click sync: fetch -> pull -> push, with a per-step report.
+  // v3.1.0: autostash, all pull options, skip push when nothing to push,
+  // pushAfter=false (= fetch + pull only), push to extra remotes.
   if (route === '/api/git/sync' && req.method === 'POST') {
-    const mode = ['merge', 'rebase', 'ff-only'].includes(body.mode) ? body.mode : 'merge';
+    const pullOpts = pullOptionsFrom(body);
     const steps = [];
     let pulled = null;
     let pushed = null;
+    const remote = pullOpts.remote;
+    const auth = await githubAuthFor(validateRemoteName(remote), body.useGithubAuth);
     try {
-      const fetchOut = await runGit(['fetch', '--all', '--prune']);
-      steps.push({ step: 'fetch', ok: true, result: (fetchOut || '').trim() });
+      const fetchOut = await runGit(auth.args.concat(['fetch', '--all', '--prune', '--progress']), { env: auth.env, onStderr: progressReporter('fetch') });
+      steps.push({ step: 'fetch', ok: true, result: cleanGitOutput(fetchOut) });
     } catch (err) {
-      steps.push({ step: 'fetch', ok: false, error: err.message });
-      return send(req, res, 200, { ok: false, steps, error: err.message, ...(await aheadBehind()) });
+      const e = failWithDetails(err);
+      steps.push({ step: 'fetch', ok: false, error: e.message, reason: e.details.reason });
+      recordHistory({ type: 'sync', ok: false, step: 'fetch', error: e.message.split('\n')[0] });
+      return send(req, res, 200, { ok: false, steps, error: e.message, reason: e.details.reason, hint: e.details.hint, ...(await aheadBehind()) });
     }
     try {
-      pulled = await pullRepo({ mode, remote: body.remote || 'origin', branch: body.branch || null });
+      pulled = await pullRepo(pullOpts);
     } catch (err) {
-      steps.push({ step: 'pull', ok: false, error: err.message });
-      return send(req, res, 200, { ok: false, steps, error: err.message, ...(await aheadBehind()) });
+      steps.push({ step: 'pull', ok: false, error: err.message, reason: (err.details || {}).reason });
+      return send(req, res, 200, { ok: false, steps, error: err.message, reason: (err.details || {}).reason, hint: (err.details || {}).hint, ...(await aheadBehind()) });
     }
     steps.push({ step: 'pull', ok: pulled.ok, conflict: !!pulled.conflict, conflicts: pulled.conflicts || [], result: pulled.result || '', commitsPulled: pulled.commitsPulled || 0, changedFiles: pulled.changedFiles || [] });
     if (!pulled.ok) {
-      return send(req, res, 200, { ok: false, conflict: !!pulled.conflict, conflicts: pulled.conflicts || [], steps, pulled, ...(await aheadBehind()) });
+      return send(req, res, 200, { ok: false, conflict: !!pulled.conflict, conflicts: pulled.conflicts || [], operation: pulled.operation, hint: pulled.hint, steps, pulled, ...(await aheadBehind()) });
+    }
+    if (pulled.pendingCommit) {
+      steps.push({ step: 'push', ok: true, skipped: true, result: 'Skipped — squash/no-commit pull left changes staged; commit them first.' });
+      return send(req, res, 200, { ok: true, steps, pulled, pushed: null, ...(await aheadBehind()) });
+    }
+    if (body.pushAfter === false) {
+      steps.push({ step: 'push', ok: true, skipped: true, result: 'Skipped (pull only).' });
+      recordHistory({ type: 'sync', ok: true, pulled: pulled.commitsPulled, pushed: false });
+      return send(req, res, 200, { ok: true, steps, pulled, pushed: null, ...(await aheadBehind()) });
+    }
+    const ab = await aheadBehind();
+    if (ab.hasUpstream && ab.ahead === 0 && body.skipEmptyPush !== false && !(Array.isArray(body.extraRemotes) && body.extraRemotes.length)) {
+      steps.push({ step: 'push', ok: true, skipped: true, result: 'Nothing to push — already up to date.' });
+      recordHistory({ type: 'sync', ok: true, pulled: pulled.commitsPulled, pushed: false });
+      return send(req, res, 200, { ok: true, steps, pulled, pushed: null, ...ab });
     }
     try {
-      pushed = await pushRepo({ remote: body.remote || 'origin', branch: body.branch || null });
+      const pushOpts = pushOptionsFrom(Object.assign({}, body, { force: false, pushAll: false, tags: false, dryRun: false, upTo: null }));
+      if (Array.isArray(body.extraRemotes) && body.extraRemotes.length) pushOpts.remotes = [pushOpts.remote].concat(body.extraRemotes);
+      pushed = await pushRepo(pushOpts);
+      if (pushed.ok === false) throw new Error(pushed.result || 'Push failed');
       steps.push({ step: 'push', ok: true, result: pushed.result || '' });
     } catch (err) {
-      steps.push({ step: 'push', ok: false, error: err.message });
-      return send(req, res, 200, { ok: false, steps, pulled, error: err.message, ...(await aheadBehind()) });
+      steps.push({ step: 'push', ok: false, error: err.message, reason: (err.details || {}).reason });
+      return send(req, res, 200, { ok: false, steps, pulled, pushed, error: err.message, reason: (err.details || {}).reason, hint: (err.details || {}).hint, ...(await aheadBehind()) });
     }
+    recordHistory({ type: 'sync', ok: true, pulled: pulled.commitsPulled, pushed: true });
     return send(req, res, 200, { ok: true, steps, pulled, pushed, ...(await aheadBehind()) });
   }
 
@@ -2605,7 +3351,8 @@ async function handle(req, res) {
   }
 
   if (route === '/api/git/conflicts' && req.method === 'GET') {
-    return send(req, res, 200, { ok: true, merging: await isMerging(), conflicts: await conflictedFiles() });
+    const op = await operationState();
+    return send(req, res, 200, { ok: true, merging: await isMerging(), operation: op.state, hint: OPERATION_HINT[op.state] || null, conflicts: await conflictedFiles() });
   }
 
   if (route === '/api/git/conflict/resolve' && req.method === 'POST') {
@@ -2614,10 +3361,15 @@ async function handle(req, res) {
     if (!(await isMerging()) && (await conflictedFiles()).length === 0) {
       throw new Error('No merge conflict in progress');
     }
-    await runGit(['checkout', `--${side}`, '--', rel]);
+    // v3.1.0: during a rebase git swaps the meaning — "--ours" is the
+    // upstream you rebase ONTO and "--theirs" is YOUR commit. The UI's
+    // "Ours" always means "my local version", so swap for rebases.
+    const op = await operationState();
+    const gitSide = op.state === 'rebase' ? (side === 'ours' ? 'theirs' : 'ours') : side;
+    await runGit(['checkout', `--${gitSide}`, '--', rel]);
     await runGit(['add', '--', rel]);
     const remaining = await conflictedFiles();
-    return send(req, res, 200, { ok: true, path: rel, side, remainingConflicts: remaining, allResolved: remaining.length === 0 });
+    return send(req, res, 200, { ok: true, path: rel, side, gitSide, operation: op.state, remainingConflicts: remaining, allResolved: remaining.length === 0 });
   }
 
   if (route === '/api/git/merge/abort' && req.method === 'POST') {
@@ -2907,6 +3659,10 @@ const server = http.createServer((req, res) => {
     const status = err instanceof GhError ? (err.status || 400) : 400;
     const payload = { error: (err && err.message) || 'Bridge error' };
     if (err && err.code) payload.code = err.code;
+    // v3.1.0: structured push/pull failure info (reason, hint, refs…)
+    if (err && err.details && typeof err.details === 'object') {
+      for (const [k, v] of Object.entries(err.details)) if (!(k in payload)) payload[k] = v;
+    }
     return send(req, res, status, payload);
   });
 });

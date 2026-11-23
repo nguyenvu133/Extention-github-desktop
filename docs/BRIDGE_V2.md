@@ -951,3 +951,31 @@ sót sau khi chạy.
   (kèm `bridge-start.log` nếu vẫn lỗi).
 - Đăng nhập bằng tài khoản GitHub thật trên github.com thật — vẫn
   là bước user phải tự làm (mục 8.5).
+
+---
+
+## 9. v3.1.0 — Pull/Push mở rộng + hỗ trợ Node 16.13
+
+### 9.1. Node 16.13
+- Bridge không còn dùng `fetch`, `Readable.fromWeb`, `AbortSignal.timeout` (không có trên Node 16.13). Thay bằng helper `httpFetch()` dựa trên `http`/`https`: timeout, theo redirect, bỏ header `Authorization` khi redirect sang host khác, `body` là Node stream (dùng cho tải zip).
+- Bridge thoát kèm thông báo tiếng Việt nếu Node < 16.13. `package.json` `engines: >=16.13.0`.
+- Script khởi động/doctor (`.bat`, `.ps1`, `.sh`) kiểm tra ≥ 16.13. `.bat` sửa lỗi tách phiên bản (`tokens=1,2 delims=v.`) — bản v3.0.2 đọc minor thành major.
+- Test dùng `tests/_node16-fetch.js` (polyfill chỉ khi thiếu `fetch`).
+
+### 9.2. API mới
+| Route | Mục đích |
+|---|---|
+| `POST /api/git/pull/preview` | Fetch + liệt kê commit/file sắp nhận |
+| `POST /api/git/pull/all-branches` | Fast-forward mọi branch có upstream |
+| `GET /api/git/pull/last`, `POST /api/git/pull/undo` | Xem/hoàn tác pull gần nhất (`reset --keep`, cần confirm) |
+| `POST /api/git/push/preview` | Commit/file sắp đẩy, cảnh báo remote đi trước |
+| `GET /api/git/operation` | Trạng thái merge/rebase/cherry-pick dở |
+| `POST /api/git/rebase/(continue\|abort\|skip)` | Điều khiển rebase (continue chặn khi còn conflict: `UNRESOLVED_CONFLICTS`) |
+| `GET /api/git/sync-history`, `POST /api/git/sync-history/clear` | Lịch sử 50 lần pull/push |
+
+`/api/git/pull` và `/api/git/push` nhận thêm các tuỳ chọn mô tả ở README mục 9. SSE mới: `git-progress`, `git-history`.
+
+### 9.3. Kiểm thử
+- `tests/bridge-v310-test.js`: 55/55 trên Node 16.13.0.
+- `node tests/run-all.js` (9 suite): ALL SUITES PASSED trên Node 16.13.0 và Node 20.
+- Chưa kiểm chứng: `.bat`/`.ps1` trên Windows thật; push/pull tới GitHub thật bằng token.

@@ -4,11 +4,11 @@
 # Set BRIDGE_PORT to use another port, e.g.:
 #   BRIDGE_PORT=17322 ./start-mac-linux.sh
 cd "$(dirname "$0")"
-echo "Starting PixiJS GitHub Bridge v3.0.2 ..."
+echo "Starting PixiJS GitHub Bridge v3.1.0 ..."
 if ! command -v node >/dev/null 2>&1; then
   echo ""
   echo "[ERROR] Node.js chua duoc cai dat (Node.js is not installed)."
-  echo "Cai Node.js 18+ tai https://nodejs.org/ roi chay lai file nay."
+  echo "Cai Node.js 16.13+ tai https://nodejs.org/ roi chay lai file nay."
   echo ""
   # Keep the window open so the user can actually read the error
   # (double-clicking the script used to close the window at once).

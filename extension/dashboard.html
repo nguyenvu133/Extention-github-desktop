@@ -11,7 +11,7 @@
 <header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.0</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.1</small></div>
   </div>
 
   <div class="gh-search">
@@ -485,11 +485,20 @@
         <h2>PUSH / PULL / SYNC</h2>
         <span id="aheadBehindBadge" class="badge">—</span>
       </div>
+      <div id="operationBar" class="op-bar hidden">
+        <span id="operationText">Đang rebase dở.</span>
+        <div class="row-actions">
+          <button id="rebaseContinueBtn" class="mini blue" title="git rebase --continue">Rebase: Continue</button>
+          <button id="rebaseSkipBtn" class="mini" title="git rebase --skip — bỏ commit đang lỗi">Rebase: Skip</button>
+          <button id="rebaseAbortBtn" class="mini" title="git rebase --abort — quay về như trước khi pull">Rebase: Abort</button>
+        </div>
+      </div>
       <div class="sync-grid">
         <label for="pullMode">Pull mode</label>
         <select id="pullMode" title="How Pull merges the remote branch">
           <option value="merge" selected>Merge</option>
           <option value="rebase">Rebase</option>
+          <option value="rebase-merges">Rebase (giữ merge commit)</option>
           <option value="ff-only">Fast-forward only</option>
         </select>
         <label for="syncRemote">Remote</label>
@@ -504,15 +513,82 @@
         <button id="syncBtn" class="blue" title="Fetch, then pull, then push — one click">Sync</button>
         <button id="localZipBtn" title="Export the local repository as a .zip">⬇ Xuất ZIP local</button>
       </div>
+      <div class="row-actions sync-actions">
+        <button id="pullPreviewBtn" title="Fetch rồi xem trước commit/file sẽ về — không đổi gì trên máy">👁 Xem trước Pull</button>
+        <button id="pushPreviewBtn" title="Xem trước commit sẽ đẩy lên và push có bị từ chối không">👁 Xem trước Push</button>
+        <button id="pullAllBtn" title="Fast-forward mọi branch local chỉ bị tụt sau upstream (bỏ qua branch đã rẽ nhánh)">⇣ Pull tất cả branch</button>
+        <button id="undoPullBtn" title="Đưa branch về đúng chỗ trước lần pull gần nhất (git reset --keep)" disabled>↶ Hoàn tác Pull</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="useGithubAuthCheck" checked> Dùng tài khoản GitHub đã đăng nhập cho remote <code>https://github.com</code> (không cần nhập mật khẩu git)</label>
+      <label class="check-row"><input type="checkbox" id="autostashCheck" checked> Autostash — tự cất thay đổi chưa commit trước khi pull rồi trả lại (<code>--autostash</code>)</label>
       <label class="check-row"><input type="checkbox" id="setUpstreamCheck"> Set upstream on push (<code>-u</code>)</label>
       <label class="check-row"><input type="checkbox" id="forcePushCheck"> Force-push with lease</label>
       <label class="check-row"><input type="checkbox" id="forceConfirmCheck" disabled> I understand force-push can overwrite the remote branch</label>
       <div class="row-actions sync-actions">
         <button id="pushAllBtn" title="Push all local branches">Push all branches</button>
         <button id="pushTagsBtn" title="Push tags">Push tags</button>
+        <button id="pushDryRunBtn" title="git push --dry-run — chạy thử, không gửi gì lên remote">Push thử (dry-run)</button>
       </div>
+
+      <details class="adv" id="pullAdvanced">
+        <summary>TUỲ CHỌN PULL NÂNG CAO</summary>
+        <div class="sync-grid">
+          <label for="strategyOption">Khi conflict</label>
+          <select id="strategyOption" title="-X: cách tự giải conflict (chỉ áp dụng khi merge/rebase)">
+            <option value="" selected>Hỏi tôi (mặc định)</option>
+            <option value="ours">Ưu tiên bản của tôi (-X ours)</option>
+            <option value="theirs">Ưu tiên bản remote (-X theirs)</option>
+            <option value="patience">Diff patience</option>
+            <option value="ignore-space-change">Bỏ qua khác biệt khoảng trắng</option>
+          </select>
+          <label for="pullDepth">Depth</label>
+          <input id="pullDepth" type="number" min="1" placeholder="(để trống = đầy đủ)">
+        </div>
+        <label class="check-row"><input type="checkbox" id="pruneCheck"> Prune — xoá branch remote-tracking đã bị xoá trên remote (<code>--prune</code>)</label>
+        <label class="check-row"><input type="checkbox" id="fetchTagsCheck"> Lấy tất cả tag (<code>--tags</code>)</label>
+        <label class="check-row"><input type="checkbox" id="squashCheck"> Squash — gộp mọi commit về thành thay đổi staged, tự commit sau (<code>--squash</code>, chỉ Merge)</label>
+        <label class="check-row"><input type="checkbox" id="noCommitCheck"> Không tự tạo merge commit (<code>--no-commit</code>, chỉ Merge)</label>
+        <label class="check-row"><input type="checkbox" id="allowUnrelatedCheck"> Cho phép lịch sử không liên quan (<code>--allow-unrelated-histories</code>)</label>
+        <label class="check-row"><input type="checkbox" id="submodulesCheck"> Cập nhật cả submodule (<code>--recurse-submodules</code>)</label>
+        <label class="check-row"><input type="checkbox" id="unshallowCheck"> Lấy đủ lịch sử nếu repo đang shallow (<code>--unshallow</code>)</label>
+      </details>
+
+      <details class="adv" id="pushAdvanced">
+        <summary>TUỲ CHỌN PUSH NÂNG CAO</summary>
+        <div class="sync-grid">
+          <label for="pushRemoteBranch">Tên branch trên remote</label>
+          <input id="pushRemoteBranch" spellcheck="false" placeholder="(giống branch local)">
+          <label for="pushUpTo">Chỉ push tới commit</label>
+          <input id="pushUpTo" spellcheck="false" placeholder="SHA (để trống = tất cả)">
+          <label for="pushExtraRemotes">Push thêm lên remote</label>
+          <input id="pushExtraRemotes" spellcheck="false" placeholder="backup, mirror (cách nhau bằng dấu phẩy)">
+          <label for="pushOptionsInput">Push options (-o)</label>
+          <input id="pushOptionsInput" spellcheck="false" placeholder="ci.skip, merge_request.create">
+          <label for="leaseSha">Lease: remote phải ở SHA</label>
+          <input id="leaseSha" spellcheck="false" placeholder="(tuỳ chọn, cho force-with-lease)">
+        </div>
+        <label class="check-row"><input type="checkbox" id="followTagsCheck"> Push kèm tag có annotate trỏ vào commit được push (<code>--follow-tags</code>)</label>
+        <label class="check-row"><input type="checkbox" id="atomicCheck"> Atomic — hoặc tất cả ref thành công, hoặc không ref nào (<code>--atomic</code>)</label>
+        <label class="check-row"><input type="checkbox" id="noVerifyCheck"> Bỏ qua hook pre-push (<code>--no-verify</code>)</label>
+        <label class="check-row"><input type="checkbox" id="forceIfIncludesCheck"> Force an toàn hơn: chỉ force nếu đã thấy commit remote (<code>--force-if-includes</code>)</label>
+        <label class="check-row"><input type="checkbox" id="syncPushAfterCheck" checked> Sync: push sau khi pull (bỏ tích = Sync chỉ fetch + pull)</label>
+      </details>
+
+      <div id="gitProgress" class="progress-line hidden"></div>
       <div id="syncSteps" class="hint">Sync runs fetch → pull → push and reports each step here.</div>
-      <p class="hint">If a pull or merge conflicts, resolve it in the Merge &amp; Conflicts panel below.</p>
+      <div id="pullPushResult" class="pp-result hidden"></div>
+      <p class="hint">If a pull or merge conflicts, resolve it in the Merge &amp; Conflicts panel below. Khi rebase, nút <b>Ours</b> vẫn luôn là <b>bản của bạn</b>.</p>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>LỊCH SỬ PULL / PUSH</h2>
+        <div class="row-actions">
+          <button id="historyReloadBtn" class="mini">Refresh</button>
+          <button id="historyClearBtn" class="mini">Xoá</button>
+        </div>
+      </div>
+      <div id="syncHistory" class="empty">Chưa có thao tác pull/push nào trong phiên bridge này.</div>
     </div>
 
     <div class="panel">

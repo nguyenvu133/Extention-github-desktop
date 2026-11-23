@@ -1,4 +1,5 @@
 'use strict';
+require('./_node16-fetch'); // v3.1.0: Node 16.13 has no global fetch
 
 /*
  * Proves the extension opens its dashboard no matter which folder

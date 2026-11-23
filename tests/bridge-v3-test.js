@@ -1,4 +1,5 @@
 'use strict';
+require('./_node16-fetch'); // v3.1.0: Node 16.13 has no global fetch
 
 /*
  * Bridge v3.0 functional test harness.
@@ -510,7 +511,7 @@ async function main() {
   {
     const res = await fetch(BASE + '/health');
     const h = await res.json();
-    check('health reports v3.0.1', h.version === '3.0.2', JSON.stringify(h.version));
+    check('health reports v3.0.1', h.version === '3.1.0', JSON.stringify(h.version));
   }
 
   /* ==================== 1. DIAGNOSTICS (bad token) ==================== */

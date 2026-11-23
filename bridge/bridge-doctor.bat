@@ -1,14 +1,14 @@
 @echo off
 REM PixiJS GitHub Desktop Sync - bridge doctor (Windows)
-REM v3.0.2 - CRLF + ASCII only. Kiem tra moi truoc khi chay bridge
+REM v3.1.0 - CRLF + ASCII only. Kiem tra moi truoc khi chay bridge
 REM va ghi bao cao ra bridge-doctor-report.txt (gui file do lai khi nho giup).
 setlocal EnableDelayedExpansion
 title PixiJS GitHub Bridge Doctor
 cd /d "%~dp0"
 if not defined BRIDGE_PORT set BRIDGE_PORT=17321
 set REPORT=bridge-doctor-report.txt
-echo PixiJS GitHub Bridge Doctor v3.0.2 - %DATE% %TIME% > "%REPORT%"
-call :r "=== PixiJS GitHub Bridge Doctor v3.0.2 ==="
+echo PixiJS GitHub Bridge Doctor v3.1.0 - %DATE% %TIME% > "%REPORT%"
+call :r "=== PixiJS GitHub Bridge Doctor v3.1.0 ==="
 call :r "Ngay gio: %DATE% %TIME%"
 call :r "Thu muc: %CD%"
 call :r "Cong kiem tra: %BRIDGE_PORT%"
@@ -19,18 +19,25 @@ call :r "1. Node.js:"
 where node >nul 2>nul
 if errorlevel 1 goto :doc_no_node
 for /f %%a in ('node -v') do set NODEVER=%%a
-for /f "tokens=2 delims=v." %%a in ('node -v') do set NODEMAJOR=%%a
+for /f "tokens=1,2 delims=v." %%a in ('node -v') do (
+  set NODEMAJOR=%%a
+  set NODEMINOR=%%b
+)
 if not defined NODEMAJOR goto :doc_node_ver
+if not defined NODEMINOR set NODEMINOR=0
 call :r "   Node.js: %NODEVER%"
-if %NODEMAJOR% LSS 18 (
-  call :r "   [LOI] Node.js qua cu, can 18 tro len."
+set NODEOLD=0
+if %NODEMAJOR% LSS 16 set NODEOLD=1
+if %NODEMAJOR% EQU 16 if %NODEMINOR% LSS 13 set NODEOLD=1
+if "%NODEOLD%"=="1" (
+  call :r "   [LOI] Node.js qua cu, can 16.13 tro len."
 ) else (
-  call :r "   Node.js OK (18 tro len)."
+  call :r "   Node.js OK (16.13 tro len)."
 )
 goto :doc_after_node
 :doc_no_node
 call :r "   [LOI] Node.js KHONG co tren may nay."
-call :r "   Cai Node.js 18 tro len tai https://nodejs.org/"
+call :r "   Cai Node.js 16.13 tro len tai https://nodejs.org/"
 goto :doc_after_node
 :doc_node_ver
 call :r "   [LOI] Khong doc duoc phien ban Node.js."

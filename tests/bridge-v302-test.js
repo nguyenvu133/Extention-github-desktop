@@ -1,4 +1,5 @@
 'use strict';
+require('./_node16-fetch'); // v3.1.0: Node 16.13 has no global fetch
 
 /*
  * Bridge v3.0.2 functional test harness — fix "start-windows.bat does
@@ -28,9 +29,9 @@
  *     bridge (report says /health OK) and once against a dead port
  *     (report says no answer).
  *   - start-mac-linux.sh: runs a REAL bridge copy in a temp dir —
- *     /health 200 + version 3.0.2.
+ *     /health 200 + version 3.1.0.
  *   - the bridge itself: `node bridge-server.js` on a test port —
- *     /health 200 + version 3.0.2 and /api/connection-test 200
+ *     /health 200 + version 3.1.0 and /api/connection-test 200
  *     (proves the bridge runs fine; only the launcher was broken).
  *   - README covers the .bat failure (extract ZIP, Node.js,
  *     SmartScreen/Unblock, manual cmd run, doctor, start-windows.ps1,
@@ -208,15 +209,15 @@ async function main() {
     const rootManifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
     const extManifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'extension', 'manifest.json'), 'utf8'));
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'bridge', 'package.json'), 'utf8'));
-    check('root manifest version 3.0.2', rootManifest.version === '3.0.2', JSON.stringify(rootManifest.version));
-    check('extension manifest version 3.0.2', extManifest.version === '3.0.2', JSON.stringify(extManifest.version));
-    check('bridge package.json version 3.0.2 + test:v302 script',
-      pkg.version === '3.0.2' && typeof pkg.scripts['test:v302'] === 'string', JSON.stringify(pkg.scripts));
+    check('root manifest version 3.1.0', rootManifest.version === '3.1.0', JSON.stringify(rootManifest.version));
+    check('extension manifest version 3.1.0', extManifest.version === '3.1.0', JSON.stringify(extManifest.version));
+    check('bridge package.json version 3.1.0 + test:v302 script',
+      pkg.version === '3.1.0' && typeof pkg.scripts['test:v302'] === 'string', JSON.stringify(pkg.scripts));
     const h = await call('GET', '/health');
-    check('health reports v3.0.2', h.ok === true && h.version === '3.0.2', JSON.stringify(h.version));
+    check('health reports v3.1.0', h.ok === true && h.version === '3.1.0', JSON.stringify(h.version));
     const ct = await call('GET', '/api/connection-test');
-    check('connection-test 200 ok + v3.0.2',
-      ct.status === 200 && ct.ok === true && ct.version === '3.0.2', JSON.stringify(ct).slice(0, 160));
+    check('connection-test 200 ok + v3.1.0',
+      ct.status === 200 && ct.ok === true && ct.version === '3.1.0', JSON.stringify(ct).slice(0, 160));
   }
 
   /* ==================== 1. start-windows.bat BYTES ==================== */
@@ -227,14 +228,14 @@ async function main() {
     batText = checkBatchBytes(buf, 'start-windows.bat');
     const need = [
       ['checks node is installed', /where node/],
-      ['checks Node major version >= 18', /LSS 18/],
+      ['checks Node version >= 16.13', /LSS 16/ && /EQU 16 if %NODEMINOR% LSS 13/],
       ['checks bridge-server.js exists', /if not exist bridge-server\.js/],
       ['checks port with netstat', /netstat/],
       ['logs to bridge-start.log', /bridge-start\.log/],
       ['pauses so the user can read errors', /pause/],
       ['waits for /health', /\/health/],
       ['tries curl first, PowerShell fallback', /curl\.exe/ && /powershell/],
-      ['version string v3.0.2', /v3\.0\.2/],
+      ['version string v3.1.0', /v3\.1\.0/],
       ['prints TOKEN from the log', /TOKEN:/],
       ['space before >> in :log (digit-eating fix)', /echo %~1 >> /],
     ];
@@ -265,13 +266,13 @@ async function main() {
     const ps = buf.slice(3).toString('utf8');
     const need = [
       ['checks node is installed', /Get-Command node/],
-      ['checks Node major version >= 18', /-lt 18/],
+      ['checks Node version >= 16.13', /-lt 16 -or/],
       ['checks bridge-server.js exists', /Test-Path 'bridge-server\.js'/],
       ['checks port', /BeginConnect/],
       ['logs to bridge-start.log', /bridge-start\.log/],
       ['waits for /health', /Invoke-WebRequest/ && /\/health/],
       ['pauses at the end (Read-Host)', /Read-Host/],
-      ['version string v3.0.2', /v3\.0\.2/],
+      ['version string v3.1.0', /v3\.1\.0/],
       ['documents ExecutionPolicy Bypass', /ExecutionPolicy Bypass/],
     ];
     for (const [name, re] of need) {
@@ -297,7 +298,7 @@ async function main() {
       ['checks port with netstat', /netstat/],
       ['checks /health', /\/health/],
       ['checks bridge-server.js', /bridge-server\.js/],
-      ['version string v3.0.2', /v3\.0\.2/],
+      ['version string v3.1.0', /v3\.1\.0/],
     ]) {
       check(`bridge-doctor.bat: ${name}`, re.test(text));
     }
@@ -317,7 +318,7 @@ async function main() {
       ['checks node version', /node -v/],
       ['checks /health with curl', /curl/ && /\/health/],
       ['respects BRIDGE_PORT env', /BRIDGE_PORT:-17321/],
-      ['version string v3.0.2', /v3\.0\.2/],
+      ['version string v3.1.0', /v3\.1\.0/],
     ]) {
       check(`bridge-doctor.sh: ${name}`, re.test(text));
     }
@@ -372,7 +373,7 @@ async function main() {
   console.log('\n[5] start-mac-linux.sh — runs a real bridge copy');
   {
     const shText = fs.readFileSync(path.join(ROOT, 'bridge', 'start-mac-linux.sh'), 'utf8');
-    check('start-mac-linux.sh: version string v3.0.2', /v3\.0\.2/.test(shText));
+    check('start-mac-linux.sh: version string v3.1.0', /v3\.1\.0/.test(shText));
     const copyDir = path.join(tmp, 'sh-copy');
     fs.mkdirSync(copyDir, { recursive: true });
     fs.copyFileSync(BRIDGE_ENTRY, path.join(copyDir, 'bridge-server.js'));
@@ -399,8 +400,8 @@ async function main() {
     check('start-mac-linux.sh with node: bridge starts (Listening:)', started === true, shOut.slice(-300));
     if (started) {
       const h = await fetch(`http://127.0.0.1:${SH_PORT}/health`).then((r) => r.json()).catch(() => ({}));
-      check('start-mac-linux.sh bridge: /health ok, v3.0.2',
-        h.ok === true && h.version === '3.0.2', JSON.stringify(h).slice(0, 120));
+      check('start-mac-linux.sh bridge: /health ok, v3.1.0',
+        h.ok === true && h.version === '3.1.0', JSON.stringify(h).slice(0, 120));
     }
     try { process.kill(-shProc.pid, 'SIGTERM'); } catch (_) { try { shProc.kill('SIGTERM'); } catch (_) {} }
     await waitExit(shProc);

@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v3.0.2
+ * PixiJS GitHub Desktop Sync — popup v3.1.0
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
  * signed-in GitHub account (with its sign-in method and email), the

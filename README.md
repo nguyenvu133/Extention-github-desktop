@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.0.2
+# PixiJS GitHub Desktop Sync — v3.1.0
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -41,12 +41,12 @@ Chrome Extension (popup + dashboard)  ⇄  Bridge (Node.js, 127.0.0.1:17321)  �
 |---|---|
 | Máy tính | **Windows, macOS hoặc Linux** (xem mục 15 nếu bạn chỉ có điện thoại) |
 | Trình duyệt | **Google Chrome** (hoặc Chromium/Edge/Brave — bản desktop) |
-| Node.js | **≥ 18** — kiểm tra bằng `node --version`. Chưa có thì tải tại <https://nodejs.org> (bản LTS) |
+| Node.js | **≥ 16.13.0** (16.13, 18, 20, 22 đều chạy) — kiểm tra bằng `node --version`. Chưa có thì tải tại <https://nodejs.org> (bản LTS) |
 | Git | Đã cài sẵn (`git --version`). Cần cho tính năng Git local |
 | Tài khoản GitHub | Để đăng nhập và xem repo (mục 6) |
 
 **Không cần cài thêm thư viện nào.** Bridge chỉ dùng module có sẵn của Node
-(`http`, `fs`, `crypto`, `child_process`, `fetch` tích hợp) — không có
+(`http`, `https`, `fs`, `crypto`, `child_process`) — từ v3.1.0 không còn phụ thuộc `fetch` tích hợp nên chạy được trên Node 16.13 — không có
 `node_modules`, không cần `npm install`.
 
 ---
@@ -63,7 +63,7 @@ cd bridge
 
 # 3. (Không cần npm install — bridge không có dependency.)
 # Kiểm tra Node:
-node --version   # phải ra v18 trở lên
+node --version   # phải ra v16.13 trở lên
 ```
 
 > Lần đầu chạy, bridge tự tạo 2 file trong `bridge/`:
@@ -92,7 +92,7 @@ ghi log ra `bridge\bridge-start.log`, đợi `/health` rồi mới báo thành
 công, mọi lỗi đều giữ cửa sổ mở). Nếu vẫn không mở được:
 
 1. Kiểm tra đã **giải nén ZIP** ra thư mục chưa (đừng chạy file trong ZIP).
-2. Kiểm tra đã cài **Node.js 18+** chưa (`node -v` trong cmd).
+2. Kiểm tra đã cài **Node.js 16.13+** chưa (`node -v` trong cmd).
 3. Nếu Windows SmartScreen chặn: chuột phải file → **Properties** →
    tích **Unblock** (nếu có) → **OK**, rồi đúp chuột lại; hoặc bấm
    **More info → Run anyway** trên màn hình SmartScreen.
@@ -121,7 +121,7 @@ cd bridge
 Khi chạy đúng, terminal sẽ hiện tương tự:
 
 ```
-PixiJS GitHub Bridge v3.0.2
+PixiJS GitHub Bridge v3.1.0
 Listening: http://127.0.0.1:17321
 Token file: bridge/.bridge-token
 TOKEN:      ab12cd34ef56... (token của bạn)
@@ -479,6 +479,29 @@ trên máy bạn** (không cần đăng nhập GitHub).
 > shell nên không sợ injection từ tên file/branch. URL/branch/remote đều
 > được kiểm tra trước khi chạy.
 
+### Pull / Push nâng cao (v3.1.0)
+
+**Pull**
+- Chế độ: `merge`, `rebase`, **rebase giữ merge commit** (`--rebase=merges`), `ff-only`.
+- **Xem trước pull** (`POST /api/git/pull/preview`): fetch rồi liệt kê commit sắp nhận, file thay đổi (+/-), cảnh báo nếu có thay đổi chưa commit hoặc có thể conflict.
+- Tuỳ chọn: autostash (mặc định bật), prune, lấy/không lấy tag, `--squash`, `--no-commit` (chờ commit tay), strategy option (`ours`/`theirs`/`patience`/… đã whitelist), cho phép unrelated histories, cập nhật submodule, `--unshallow`/`--depth`.
+- **Pull tất cả branch** (`POST /api/git/pull/all-branches`): fast-forward mọi branch local có upstream, bỏ qua branch bị lệch.
+- **Hoàn tác pull gần nhất** (`POST /api/git/pull/undo`, cần xác nhận): `git reset --keep` về commit trước pull, không mất thay đổi chưa commit.
+- Kết quả trả về danh sách commit đã nhận + thống kê file.
+
+**Push**
+- **Xem trước push** (`POST /api/git/push/preview`): commit sắp đẩy, file thay đổi, cảnh báo nếu remote đi trước (cần pull trước).
+- Tuỳ chọn: push lên nhiều remote cùng lúc, đổi tên branch ở remote, push tới một commit (`upTo`), **dry-run**, `--no-verify`, `--atomic`, `--follow-tags`, push option (`-o`), `--force-with-lease` (kèm SHA) và `--force-if-includes`.
+- Dùng `--porcelain` để báo chính xác từng ref: mới, fast-forward, bị từ chối, không đổi.
+- Không cho push khi đang merge/rebase dở.
+
+**Chung**
+- **Dùng token GitHub đã đăng nhập** cho remote `https://github.com` (mặc định bật) — truyền qua credential helper tạm thời, không ghi token vào `.git/config`.
+- **Thanh tiến trình** (SSE `git-progress`) và **lịch sử pull/push** 50 lần gần nhất (`GET /api/git/sync-history`).
+- **Rebase dở dang**: thanh trạng thái hiện Continue / Skip / Abort (`/api/git/rebase/*`); Continue bị chặn nếu còn file conflict. Khi resolve conflict trong lúc rebase, "ours" luôn là bản của bạn.
+- Lỗi được phân loại kèm gợi ý tiếng Việt (chưa đăng nhập, non-fast-forward, conflict, mạng, quyền…).
+- Sync có thể chỉ pull (`pushAfter=false`) và bỏ qua push khi không có gì để đẩy.
+
 ---
 
 ## 10. Popup nhanh
@@ -580,8 +603,8 @@ sai lệnh, cửa sổ tắt trước khi kịp hiện lỗi. Từ v3.0.2 file �
    thư mục rồi mới chạy. **Đừng** đúp chuột vào file `.bat` khi nó còn
    nằm trong ZIP (Windows mở file trong thư mục tạm, thiếu
    `bridge-server.js` nên tắt ngay).
-2. **Đã cài Node.js 18+ chưa?** Mở cmd, gõ `node -v` — phải thấy
-   `v18.x` trở lên. Chưa có thì cài tại <https://nodejs.org/> (bản LTS),
+2. **Đã cài Node.js 16.13+ chưa?** Mở cmd, gõ `node -v` — phải thấy
+   `v16.13.x` trở lên. Chưa có thì cài tại <https://nodejs.org/> (bản LTS),
    cài xong đóng hết cửa sổ cmd rồi chạy lại file `.bat`.
 3. **Windows SmartScreen chặn file tải từ internet?** Chuột phải file
    `.bat` → **Properties** → nếu có mục **Unblock** ở dưới thì tích vào
@@ -867,6 +890,7 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.1.0 (2026-11-23)** — Mở rộng pull/push (xem trước, pull tất cả branch, hoàn tác pull, rebase giữ merge commit, squash/no-commit, strategy option, push nhiều remote, dry-run, atomic, follow-tags, push option, force-with-lease + force-if-includes, porcelain), dùng token GitHub cho remote HTTPS, tiến trình SSE, lịch sử pull/push, thanh Continue/Skip/Abort khi rebase dở. **Hạ yêu cầu Node.js xuống 16.13.0**: bỏ `fetch`/`Readable.fromWeb`/`AbortSignal.timeout`, thay bằng `http`/`https` có sẵn. Sửa lỗi `start-windows.bat` đọc nhầm số phiên bản Node (Node 22.11 bị coi là quá cũ). Test: 9 suite đều qua trên Node 16.13.0 và Node 20 (suite mới `bridge-v310-test.js`: 55/55).
 - **v3.0.2 (2026-11-23)** — Sửa triệt để lỗi không mở được
   `start-windows.bat` (đúp chuột không chạy / cửa sổ nháy rồi tắt):
   file `.bat` viết lại đúng chuẩn Windows (CRLF từng dòng, ASCII thuần,

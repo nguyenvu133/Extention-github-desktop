@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.0.2
+ * PixiJS GitHub Desktop Sync — dashboard v3.1.0
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
@@ -135,7 +135,12 @@ async function fetchJson(url, options) {
   const res = await bridgeFetch(url, options);
   let data = {};
   try { data = await res.json(); } catch (_) {}
-  if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+  if (!res.ok) {
+    const err = new Error(data.error || 'HTTP ' + res.status);
+    err.data = data; // v3.1.0: reason / hint / refs for push & pull failures
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -322,6 +327,14 @@ function startEventStream() {
         if (localConnected) refreshAllLocal().catch(() => {});
       }
       if (payload.at) showAutoUpdate({ lastAutoSync: payload });
+    });
+    source.addEventListener('git-progress', (ev) => {
+      let payload = {};
+      try { payload = JSON.parse(ev.data); } catch (_) {}
+      showGitProgress(payload);
+    });
+    source.addEventListener('git-history', () => {
+      if (localConnected) loadSyncHistory().catch(() => {});
     });
     source.addEventListener('rate-limit', (ev) => {
       let payload = {};
@@ -1824,6 +1837,62 @@ function syncTarget() {
   };
 }
 
+/* v3.1.0 — every pull/push option the panel exposes, in one place. */
+function splitList(value) {
+  return String(value || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function pullOptions() {
+  const t = syncTarget();
+  const depth = Number($('pullDepth').value);
+  return {
+    mode: t.mode,
+    remote: t.remote,
+    branch: t.branch,
+    autostash: !!$('autostashCheck').checked,
+    prune: !!$('pruneCheck').checked,
+    fetchTags: !!$('fetchTagsCheck').checked,
+    squash: !!$('squashCheck').checked,
+    noCommit: !!$('noCommitCheck').checked,
+    allowUnrelated: !!$('allowUnrelatedCheck').checked,
+    recurseSubmodules: !!$('submodulesCheck').checked,
+    unshallow: !!$('unshallowCheck').checked,
+    depth: Number.isInteger(depth) && depth > 0 ? depth : null,
+    strategyOption: $('strategyOption').value || null,
+    useGithubAuth: !!$('useGithubAuthCheck').checked,
+  };
+}
+
+function pushOptions(extra) {
+  const t = syncTarget();
+  const force = !!$('forcePushCheck').checked;
+  if (force && !$('forceConfirmCheck').checked) {
+    throw new Error('Force-push needs the confirmation checkbox ticked first ("I understand force-push can overwrite the remote branch").');
+  }
+  const extraRemotes = splitList($('pushExtraRemotes').value);
+  const body = {
+    remote: t.remote,
+    branch: t.branch,
+    remoteBranch: $('pushRemoteBranch').value.trim() || null,
+    upTo: $('pushUpTo').value.trim() || null,
+    setUpstream: !!$('setUpstreamCheck').checked,
+    force,
+    confirm: force, // only ever sent when the user ticked both checkboxes
+    forceIfIncludes: force && !!$('forceIfIncludesCheck').checked,
+    leaseSha: force ? ($('leaseSha').value.trim() || null) : null,
+    followTags: !!$('followTagsCheck').checked,
+    atomic: !!$('atomicCheck').checked,
+    noVerify: !!$('noVerifyCheck').checked,
+    pushOptions: splitList($('pushOptionsInput').value),
+    useGithubAuth: !!$('useGithubAuthCheck').checked,
+    pushAll: !!(extra && extra.pushAll),
+    tags: !!(extra && extra.tags),
+    dryRun: !!(extra && extra.dryRun),
+  };
+  if (extraRemotes.length) body.remotes = [t.remote].concat(extraRemotes);
+  return body;
+}
+
 async function loadAheadBehind() {
   const data = await api('/api/git/ahead-behind');
   const badge = $('aheadBehindBadge');
@@ -1853,12 +1922,95 @@ function showAheadBehind(data) {
   }
 }
 
+/* ---- small safe DOM builders (textContent only, never innerHTML) ---- */
+function mk(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined && text !== null) node.textContent = String(text);
+  return node;
+}
+
+function commitListEl(commits, max) {
+  const ul = mk('ul');
+  for (const c of (commits || []).slice(0, max || 20)) {
+    const li = mk('li');
+    li.append(mk('code', null, c.short || String(c.sha || '').slice(0, 7)), document.createTextNode(' ' + (c.subject || '') + ' — ' + (c.author || '') + ' · ' + timeAgo(c.date)));
+    ul.append(li);
+  }
+  if ((commits || []).length > (max || 20)) ul.append(mk('li', 'hint', `… và ${(commits.length - (max || 20))} commit khác`));
+  return ul;
+}
+
+function fileListEl(files, max) {
+  const ul = mk('ul');
+  for (const f of (files || []).slice(0, max || 15)) {
+    ul.append(mk('li', null, `${f.path}  ${f.binary ? '(binary)' : `+${f.insertions || 0} −${f.deletions || 0}`}`));
+  }
+  if ((files || []).length > (max || 15)) ul.append(mk('li', 'hint', `… và ${files.length - (max || 15)} file khác`));
+  return ul;
+}
+
+function showResult(builder) {
+  const box = $('pullPushResult');
+  box.textContent = '';
+  builder(box);
+  box.classList.toggle('hidden', !box.childNodes.length);
+}
+
+function renderPullResult(res) {
+  showResult((box) => {
+    if (res.conflict) {
+      box.append(mk('h4', 'bad', `⚠ Conflict (${res.operation || 'merge'}) ở ${(res.conflicts || []).length} file`));
+      box.append(fileListEl((res.conflicts || []).map((p) => ({ path: p, insertions: 0, deletions: 0 }))));
+      if (res.hint) box.append(mk('div', 'hint', res.hint));
+      return;
+    }
+    if (res.upToDate) { box.append(mk('h4', 'ok', '✓ Đã cập nhật — không có commit mới.')); return; }
+    const s = res.stats || {};
+    box.append(mk('h4', 'ok', `✓ Pull (${res.mode}) — ${res.commitsPulled || 0} commit, ${s.fileCount || 0} file, +${s.insertions || 0} −${s.deletions || 0}${res.fastForward ? ' · fast-forward' : ''}`));
+    if (res.pendingCommit) box.append(mk('div', 'warn', 'Thay đổi đã được stage nhưng CHƯA commit (squash / no-commit) — viết message rồi Commit.'));
+    if (res.commits && res.commits.length) box.append(commitListEl(res.commits));
+    if (s.files && s.files.length) box.append(fileListEl(s.files));
+    if (res.usedGithubAuth) box.append(mk('div', 'hint', 'Đã dùng tài khoản GitHub đang đăng nhập để xác thực.'));
+  });
+}
+
+function renderPushResult(res) {
+  showResult((box) => {
+    if (res.multi) {
+      box.append(mk('h4', res.ok ? 'ok' : 'bad', res.ok ? '✓ Push lên nhiều remote' : '✗ Push lên nhiều remote: có remote lỗi'));
+      const ul = mk('ul');
+      for (const r of res.results || []) ul.append(mk('li', r.ok ? 'ok' : 'bad', `${r.remote}: ${r.ok ? (r.upToDate ? 'đã cập nhật' : 'OK') : r.error}`));
+      box.append(ul);
+      return;
+    }
+    const title = res.dryRun ? '✓ Push thử (dry-run) — chưa gửi gì lên remote' : res.upToDate ? '✓ Remote đã cập nhật — không có gì để push' : `✓ Push lên ${res.remote}/${res.remoteBranch || res.branch}`;
+    box.append(mk('h4', 'ok', title + (res.forced ? ' (forced)' : '')));
+    const ul = mk('ul');
+    for (const r of res.refs || []) ul.append(mk('li', r.status === 'rejected' ? 'bad' : null, `${r.status}: ${r.from || ''} → ${r.to || ''} ${r.summary ? '(' + r.summary + ')' : ''}`));
+    if (ul.childNodes.length) box.append(ul);
+    if (res.usedGithubAuth) box.append(mk('div', 'hint', 'Đã dùng tài khoản GitHub đang đăng nhập để xác thực.'));
+  });
+}
+
+function renderPushError(err) {
+  const d = err.data || {};
+  showResult((box) => {
+    box.append(mk('h4', 'bad', '✗ Push thất bại' + (d.reason && d.reason !== 'unknown' ? ` (${d.reason})` : '')));
+    if (d.hint) box.append(mk('div', 'warn', d.hint));
+    const ul = mk('ul');
+    for (const r of d.refs || []) ul.append(mk('li', r.status === 'rejected' ? 'bad' : null, `${r.status}: ${r.from || ''} → ${r.to || ''} ${r.summary ? '(' + r.summary + ')' : ''}`));
+    if (ul.childNodes.length) box.append(ul);
+  });
+}
+
 // A pull/merge that conflicts returns HTTP 200 { ok:false, conflict:true }.
 // Surface it in the Merge & Conflicts panel instead of a bare error.
 async function handlePossibleConflict(res, what) {
   if (res && res.conflict) {
-    log(`${what}: merge conflict in ${(res.conflicts || []).length} file(s) — resolve below (Ours / Theirs), then Commit merge.`);
+    log(`${what}: ${res.operation || 'merge'} conflict in ${(res.conflicts || []).length} file(s) — resolve below (Ours / Theirs), then ${res.operation === 'rebase' ? 'Rebase: Continue' : 'Commit merge'}.`);
     await loadConflicts();
+    await loadOperation().catch(() => {});
     return true;
   }
   return false;
@@ -1870,44 +2022,197 @@ async function doFetch() {
   await status();
 }
 
-async function doPull() {
-  const t = syncTarget();
-  const res = await api('/api/git/pull', 'POST', { mode: t.mode, remote: t.remote, branch: t.branch });
+async function afterRemoteOp(res) {
   showAheadBehind(res);
   await loadAheadBehind().catch(() => {});
+  await loadOperation().catch(() => {});
+  await loadUndoState().catch(() => {});
+  await loadSyncHistory().catch(() => {});
+  await status();
+  await history();
+}
+
+async function doPull() {
+  const opts = pullOptions();
+  let res;
+  try {
+    res = await api('/api/git/pull', 'POST', opts);
+  } catch (err) {
+    const d = err.data || {};
+    showResult((box) => {
+      box.append(mk('h4', 'bad', '✗ Pull thất bại' + (d.reason && d.reason !== 'unknown' ? ` (${d.reason})` : '')));
+      if (d.hint) box.append(mk('div', 'warn', d.hint));
+    });
+    await loadOperation().catch(() => {});
+    throw err;
+  }
+  renderPullResult(res);
   if (await handlePossibleConflict(res, 'Pull')) {
-    await status();
-    await history();
+    await afterRemoteOp(res);
     return res;
   }
   if (!res.ok) throw new Error(res.error || res.result || 'Pull failed');
-  log(`Pull (${res.mode || t.mode}) ✓ — ${res.commitsPulled || 0} commit(s), ${((res.changedFiles || []).length)} file(s) changed${res.fastForward ? ' (fast-forward)' : ''}`);
-  await status();
-  await history();
+  log(`Pull (${res.mode || opts.mode}) ✓ — ${res.commitsPulled || 0} commit(s), ${((res.changedFiles || []).length)} file(s) changed${res.fastForward ? ' (fast-forward)' : ''}`);
+  await afterRemoteOp(res);
   return res;
 }
 
 async function doPush(options) {
-  const t = syncTarget();
-  const force = !!$('forcePushCheck').checked;
-  if (force && !$('forceConfirmCheck').checked) {
-    throw new Error('Force-push needs the confirmation checkbox ticked first ("I understand force-push can overwrite the remote branch").');
+  const body = pushOptions(options);
+  let res;
+  try {
+    res = await api('/api/git/push', 'POST', body);
+  } catch (err) {
+    renderPushError(err);
+    throw err;
   }
-  const body = {
-    remote: t.remote,
-    branch: t.branch,
-    setUpstream: !!$('setUpstreamCheck').checked,
-    force,
-    confirm: force, // only ever sent when the user ticked both checkboxes
-    pushAll: !!(options && options.pushAll),
-    tags: !!(options && options.tags),
-  };
-  const res = await api('/api/git/push', 'POST', body);
-  showAheadBehind(res);
-  await loadAheadBehind().catch(() => {});
-  await status();
-  await history();
+  renderPushResult(res);
+  await afterRemoteOp(res);
+  if (res.ok === false) throw new Error('Một số remote push lỗi — xem chi tiết bên dưới.');
   return res;
+}
+
+async function doPullPreview() {
+  const t = syncTarget();
+  const res = await api('/api/git/pull/preview', 'POST', { remote: t.remote, branch: t.branch, useGithubAuth: !!$('useGithubAuthCheck').checked });
+  showResult((box) => {
+    box.append(mk('h4', res.upToDate ? 'ok' : res.diverged ? 'warn' : 'ok',
+      `👁 Xem trước Pull từ ${res.remote}/${res.branch}: ${res.incomingCount} commit sẽ về, bạn đang hơn ${res.outgoingCount} commit`));
+    box.append(mk('div', res.dirtyOverlap && res.dirtyOverlap.length ? 'warn' : 'hint', res.suggestion));
+    if (res.possibleConflicts && res.possibleConflicts.length) box.append(mk('div', 'warn', 'Có thể conflict: ' + res.possibleConflicts.join(', ')));
+    if (res.dirtyOverlap && res.dirtyOverlap.length) box.append(mk('div', 'warn', 'File đang sửa trùng: ' + res.dirtyOverlap.join(', ')));
+    if (res.incoming && res.incoming.length) box.append(commitListEl(res.incoming));
+    const s = res.stats || {};
+    if (s.files && s.files.length) {
+      box.append(mk('div', 'hint', `${s.fileCount} file · +${s.insertions} −${s.deletions}`));
+      box.append(fileListEl(s.files));
+    }
+  });
+  showAheadBehind(res);
+  log(`Pull preview: ${res.incomingCount} incoming, ${res.outgoingCount} outgoing.`);
+  return res;
+}
+
+async function doPushPreview() {
+  const t = syncTarget();
+  const res = await api('/api/git/push/preview', 'POST', {
+    remote: t.remote, branch: t.branch,
+    remoteBranch: $('pushRemoteBranch').value.trim() || null,
+    useGithubAuth: !!$('useGithubAuthCheck').checked,
+  });
+  showResult((box) => {
+    box.append(mk('h4', res.willBeRejected ? 'warn' : 'ok',
+      `👁 Xem trước Push lên ${res.remote}/${res.remoteBranch}: ${res.outgoingCount} commit sẽ đi${res.newBranch ? ' (branch mới)' : ''}`));
+    box.append(mk('div', res.willBeRejected ? 'warn' : 'hint', res.suggestion));
+    if (res.outgoing && res.outgoing.length) box.append(commitListEl(res.outgoing));
+    const s = res.stats || {};
+    if (s.files && s.files.length) {
+      box.append(mk('div', 'hint', `${s.fileCount} file · +${s.insertions} −${s.deletions}`));
+      box.append(fileListEl(s.files));
+    }
+    if (res.tagsOnHead && res.tagsOnHead.length) box.append(mk('div', 'hint', 'Tag trên commit này: ' + res.tagsOnHead.join(', ') + ' — tích --follow-tags hoặc bấm Push tags để đẩy kèm.'));
+  });
+  log(`Push preview: ${res.outgoingCount} outgoing${res.willBeRejected ? ', would be REJECTED (remote ahead by ' + res.behindCount + ')' : ''}.`);
+  return res;
+}
+
+async function doPullAllBranches() {
+  const t = syncTarget();
+  const res = await api('/api/git/pull/all-branches', 'POST', { remote: t.remote, useGithubAuth: !!$('useGithubAuthCheck').checked });
+  const LABEL = { updated: '✓ đã fast-forward', 'up-to-date': 'đã cập nhật', ahead: 'đang hơn remote (chưa push)', diverged: '⚠ đã rẽ nhánh — bỏ qua, hãy pull riêng', 'no-upstream': 'không có upstream', 'other-remote': 'theo remote khác', 'upstream-gone': 'upstream đã bị xoá', failed: '✗ lỗi' };
+  showResult((box) => {
+    box.append(mk('h4', 'ok', `⇣ Pull tất cả branch từ ${res.remote}: ${res.updated} branch được cập nhật`));
+    const ul = mk('ul');
+    for (const r of res.results || []) {
+      ul.append(mk('li', r.status === 'diverged' || r.status === 'failed' ? 'warn' : r.status === 'updated' ? 'ok' : null,
+        `${r.branch}: ${LABEL[r.status] || r.status}${r.behind ? ` (↓${r.behind})` : ''}${r.error ? ' — ' + r.error : ''}`));
+    }
+    box.append(ul);
+  });
+  await afterRemoteOp(res);
+  return res;
+}
+
+async function loadUndoState() {
+  const res = await api('/api/git/pull/last');
+  const btn = $('undoPullBtn');
+  btn.disabled = !res.undoAvailable;
+  btn.title = res.undoAvailable && res.lastPull
+    ? `Đưa ${res.lastPull.branch} về ${String(res.lastPull.oldSha).slice(0, 7)} (trước lần pull lúc ${new Date(res.lastPull.at).toLocaleTimeString()})`
+    : 'Không có lần pull nào để hoàn tác';
+  return res;
+}
+
+async function doUndoPull() {
+  if (!confirm('Hoàn tác lần pull gần nhất? Branch sẽ quay về commit trước khi pull (git reset --keep — không mất thay đổi chưa commit).')) return null;
+  const res = await api('/api/git/pull/undo', 'POST', { confirm: true });
+  showResult((box) => box.append(mk('h4', 'ok', `↶ Đã hoàn tác pull — ${res.branch} quay về ${String(res.restoredSha).slice(0, 7)}`)));
+  await afterRemoteOp(res);
+  return res;
+}
+
+async function loadOperation() {
+  const res = await api('/api/git/operation');
+  const bar = $('operationBar');
+  const isRebase = res.state === 'rebase';
+  bar.classList.toggle('hidden', !res.state);
+  $('operationText').textContent = res.state
+    ? `${res.hint || 'Đang có thao tác dở: ' + res.state}${res.conflicts && res.conflicts.length ? ` — còn ${res.conflicts.length} file conflict.` : ''}`
+    : '';
+  for (const id of ['rebaseContinueBtn', 'rebaseSkipBtn', 'rebaseAbortBtn']) $(id).classList.toggle('hidden', !isRebase);
+  return res;
+}
+
+async function doRebase(action) {
+  if (action === 'abort' && !confirm('Huỷ rebase và đưa branch về như trước khi pull?')) return null;
+  const res = await api('/api/git/rebase/' + action, 'POST', {});
+  if (res.conflict) {
+    log(`Rebase ${action}: còn conflict ở ${(res.conflicts || []).length} file — xử lý tiếp rồi bấm Continue.`);
+    await loadConflicts();
+  } else {
+    log(`Rebase ${action} ✓${res.done ? ' — rebase xong' : ''}`);
+  }
+  await afterRemoteOp(res);
+  return res;
+}
+
+const HISTORY_LABEL = { pull: 'Pull', push: 'Push', sync: 'Sync', 'pull-all': 'Pull all', 'undo-pull': 'Undo pull', 'rebase-continue': 'Rebase ▶', 'rebase-abort': 'Rebase ✕', 'rebase-skip': 'Rebase ⤼' };
+
+function historySummary(h) {
+  if (h.error) return h.error;
+  if (h.type === 'pull') return h.conflict ? `conflict ở ${h.conflicts} file (${h.mode})` : `${h.remote}/${h.branch} · ${h.commits || 0} commit · +${h.insertions || 0} −${h.deletions || 0} (${h.mode})`;
+  if (h.type === 'push') return `${h.remote}/${h.remoteBranch || h.branch}${h.dryRun ? ' · dry-run' : ''}${h.force ? ' · force' : ''}${h.commits ? ` · ${h.commits} commit` : ''}`;
+  if (h.type === 'sync') return `pull ${h.pulled || 0} commit · ${h.pushed ? 'đã push' : 'không push'}`;
+  if (h.type === 'pull-all') return `${h.updated || 0} branch cập nhật · ${h.diverged || 0} rẽ nhánh`;
+  if (h.type === 'undo-pull') return `${h.branch}: ${String(h.from || '').slice(0, 7)} → ${String(h.to || '').slice(0, 7)}`;
+  return h.conflict ? `conflict ở ${h.conflicts} file` : '';
+}
+
+async function loadSyncHistory() {
+  const res = await api('/api/git/sync-history?limit=20');
+  const box = $('syncHistory');
+  box.textContent = '';
+  const items = res.history || [];
+  box.classList.toggle('empty', !items.length);
+  if (!items.length) {
+    box.textContent = 'Chưa có thao tác pull/push nào trong phiên bridge này.';
+    return res;
+  }
+  for (const h of items) {
+    const row = mk('div', 'hist-row');
+    row.append(mk('time', null, new Date(h.at).toLocaleTimeString()), mk('span', 't ' + (h.ok ? 'ok' : 'bad'), (h.ok ? '✓ ' : '✗ ') + (HISTORY_LABEL[h.type] || h.type)), mk('span', null, historySummary(h)));
+    box.append(row);
+  }
+  return res;
+}
+
+let progressHideTimer = null;
+function showGitProgress(payload) {
+  const line = $('gitProgress');
+  line.textContent = `${payload.op || 'git'}: ${payload.line || ''}`;
+  line.classList.remove('hidden');
+  clearTimeout(progressHideTimer);
+  progressHideTimer = setTimeout(() => line.classList.add('hidden'), 4000);
 }
 
 function renderSyncSteps(res) {
@@ -1918,15 +2223,22 @@ function renderSyncSteps(res) {
     return;
   }
   box.textContent = steps.map((s) =>
-    `${s.step}: ${s.ok ? '✓' : '✗'}${s.conflict ? ' (conflict)' : ''}${s.result ? ' — ' + String(s.result).split('\n')[0] : ''}${s.error ? ' — ' + s.error : ''}`
-  ).join('  ·  ');
+    `${s.step}: ${s.ok ? (s.skipped ? '–' : '✓') : '✗'}${s.conflict ? ' (conflict)' : ''}${s.result ? ' — ' + String(s.result).split('\n')[0] : ''}${s.error ? ' — ' + String(s.error).split('\n')[0] : ''}`
+  ).join('  ·  ') + (res.hint ? '  →  ' + res.hint : '');
 }
 
 async function doSync() {
-  const t = syncTarget();
+  const body = pullOptions();
+  body.pushAfter = !!$('syncPushAfterCheck').checked;
+  const p = pushOptions();
+  Object.assign(body, {
+    setUpstream: p.setUpstream, followTags: p.followTags, noVerify: p.noVerify, atomic: p.atomic,
+    remoteBranch: p.remoteBranch, pushOptions: p.pushOptions,
+    extraRemotes: splitList($('pushExtraRemotes').value),
+  });
   let res;
   try {
-    res = await api('/api/git/sync', 'POST', { mode: t.mode, remote: t.remote, branch: t.branch });
+    res = await api('/api/git/sync', 'POST', body);
   } catch (err) {
     // The bridge answers 400 when a step throws outright (e.g. no remote
     // configured) instead of a per-step report — show it in the panel too.
@@ -1934,17 +2246,15 @@ async function doSync() {
     throw err;
   }
   renderSyncSteps(res);
-  showAheadBehind(res);
-  await loadAheadBehind().catch(() => {});
+  if (res.pulled) renderPullResult(res.pulled);
   if (await handlePossibleConflict(res, 'Sync')) {
-    await status();
-    await history();
+    await afterRemoteOp(res);
     return res;
   }
+  await afterRemoteOp(res);
   if (!res.ok) throw new Error(res.error || 'Sync failed at the ' + ((res.steps || []).find((s) => !s.ok) || {}).step + ' step');
-  log(`Sync ✓ — pulled ${((res.pulled || {}).commitsPulled) || 0} commit(s), pushed.`);
-  await status();
-  await history();
+  const pushStep = (res.steps || []).find((s) => s.step === 'push') || {};
+  log(`Sync ✓ — pulled ${((res.pulled || {}).commitsPulled) || 0} commit(s), ${pushStep.skipped ? 'push skipped' : 'pushed'}.`);
   return res;
 }
 
@@ -2189,6 +2499,9 @@ async function refreshAllLocal() {
   await loadRemotes().catch(() => {});
   await loadDiffSummary().catch(() => {});
   await loadTags().catch(() => {});
+  await loadOperation().catch(() => {});
+  await loadUndoState().catch(() => {});
+  await loadSyncHistory().catch(() => {});
 }
 
 /* ------------------------------------------------------------------ */
@@ -2669,6 +2982,16 @@ $('push').onclick = () => run('Push completed', doPush);
 $('syncBtn').onclick = () => run('Sync completed', doSync);
 $('pushAllBtn').onclick = () => run('Push all branches completed', () => doPush({ pushAll: true }));
 $('pushTagsBtn').onclick = () => run('Push tags completed', () => doPush({ tags: true }));
+$('pushDryRunBtn').onclick = () => run('Push dry-run completed', () => doPush({ dryRun: true }));
+$('pullPreviewBtn').onclick = () => run('Pull preview ready', doPullPreview);
+$('pushPreviewBtn').onclick = () => run('Push preview ready', doPushPreview);
+$('pullAllBtn').onclick = () => run('Pull all branches completed', doPullAllBranches);
+$('undoPullBtn').onclick = () => run('Undo pull completed', doUndoPull);
+$('rebaseContinueBtn').onclick = () => run('Rebase continue', () => doRebase('continue'));
+$('rebaseSkipBtn').onclick = () => run('Rebase skip', () => doRebase('skip'));
+$('rebaseAbortBtn').onclick = () => run('Rebase abort', () => doRebase('abort'));
+$('historyReloadBtn').onclick = () => run('History refreshed', loadSyncHistory);
+$('historyClearBtn').onclick = () => run('History cleared', async () => { await api('/api/git/sync-history/clear', 'POST', {}); await loadSyncHistory(); });
 $('forcePushCheck').onchange = () => {
   $('forceConfirmCheck').disabled = !$('forcePushCheck').checked;
   if (!$('forcePushCheck').checked) $('forceConfirmCheck').checked = false;

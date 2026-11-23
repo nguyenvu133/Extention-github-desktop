@@ -1,4 +1,5 @@
 'use strict';
+require('./_node16-fetch'); // v3.1.0: Node 16.13 has no global fetch
 
 /*
  * Functional test harness for the extension's own source files.
@@ -160,7 +161,7 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '3.0.2' }),
+      getManifest: () => ({ version: '3.1.0' }),
       getURL: (p) => 'chrome-extension://test/' + p,
       id: 'test-extension-id', // v3.0.1: isExtensionContext() needs this
       onMessage: { addListener() {} },
@@ -363,7 +364,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
     check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
       p.getElementById('message').textContent);
-    check('popup version from manifest', p.getElementById('version').textContent === 'v3.0.2',
+    check('popup version from manifest', p.getElementById('version').textContent === 'v3.1.0',
       p.getElementById('version').textContent);
     check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
       p.getElementById('repoName').textContent);

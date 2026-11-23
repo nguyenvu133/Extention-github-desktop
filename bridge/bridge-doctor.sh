@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 # PixiJS GitHub Desktop Sync - bridge doctor (macOS / Linux)
-# v3.0.2 - Kiem tra moi truoc khi chay bridge va ghi bao cao ra
+# v3.1.0 - Kiem tra moi truoc khi chay bridge va ghi bao cao ra
 # bridge-doctor-report.txt (gui file do lai khi nho giup).
 cd "$(dirname "$0")"
 PORT="${BRIDGE_PORT:-17321}"
 REPORT="bridge-doctor-report.txt"
 {
-echo "=== PixiJS GitHub Bridge Doctor v3.0.2 ==="
+echo "=== PixiJS GitHub Bridge Doctor v3.1.0 ==="
 echo "Ngay gio: $(date)"
 echo "Thu muc: $(pwd)"
 echo "He dieu hanh: $(uname -s) $(uname -r)"
@@ -16,16 +16,18 @@ echo "1. Node.js:"
 if command -v node >/dev/null 2>&1; then
   echo "   Node.js: $(node -v)"
   MAJOR=$(node -v 2>/dev/null | tr -dc '0-9.' | cut -d. -f1)
+  MINOR=$(node -v 2>/dev/null | tr -dc '0-9.' | cut -d. -f2)
+  [ -z "$MINOR" ] && MINOR=0
   if [ -z "$MAJOR" ]; then
     echo "   [LOI] Khong doc duoc phien ban Node.js."
-  elif [ "$MAJOR" -lt 18 ]; then
-    echo "   [LOI] Node.js qua cu, can 18 tro len."
+  elif [ "$MAJOR" -lt 16 ] || { [ "$MAJOR" -eq 16 ] && [ "$MINOR" -lt 13 ]; }; then
+    echo "   [LOI] Node.js qua cu, can 16.13 tro len."
   else
-    echo "   Node.js OK (18 tro len)."
+    echo "   Node.js OK (16.13 tro len)."
   fi
 else
   echo "   [LOI] Node.js KHONG co tren may nay."
-  echo "   Cai Node.js 18 tro len tai https://nodejs.org/"
+  echo "   Cai Node.js 16.13 tro len tai https://nodejs.org/"
 fi
 echo ""
 echo "2. File bridge-server.js:"
