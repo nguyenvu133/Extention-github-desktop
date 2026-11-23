@@ -1,7 +1,16 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v2.1.0
+ * PixiJS GitHub Desktop Sync — popup v3.0.0
+ *
+ * Shows, at a glance: bridge connection state (with reconnect), the
+ * signed-in GitHub account (with its sign-in method and email), the
+ * connected local repository with its ahead/behind badge, quick Git
+ * actions (status / fetch / pull / push / sync), local .zip export,
+ * and the auto-update switch.
+ * The popup re-checks the bridge on open, on demand (reconnect button)
+ * and every 10 s while it stays open, so it recovers on its own when
+ * the bridge comes back.
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
  * signed-in GitHub account (with its sign-in method), the connected
@@ -18,7 +27,7 @@
  */
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60 };
+const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, settingsDefaultBranch: '', settingsNotifications: true };
 
 let bridgeState = 'checking'; // 'connected' | 'reconnecting' | 'disconnected'
 let pollTimer = null;
@@ -49,6 +58,8 @@ async function settings() {
     token: String(s.token || '').trim(),
     autoUpdateEnabled: !!s.autoUpdateEnabled,
     autoUpdateInterval: Number(s.autoUpdateInterval) || 60,
+    settingsDefaultBranch: String(s.settingsDefaultBranch || '').trim(),
+    settingsNotifications: s.settingsNotifications !== false,
   };
 }
 
@@ -103,6 +114,8 @@ function showGithub(user) {
     $('ghAvatar').src = user.avatar_url || '';
     $('ghAvatar').alt = user.login;
     $('ghLogin').textContent = user.login;
+    // v3.0: show the account email when the bridge reports it.
+    $('ghEmail').textContent = user.email || '';
     const method = authMethodLabel(user.authMethod);
     $('ghAuthMethod').textContent =
       (method ? 'via ' + method : '') + (user.scopes ? ' · ' + user.scopes : '');
@@ -112,6 +125,7 @@ function showGithub(user) {
     $('githubSignedIn').classList.add('hidden');
     $('ghAvatar').src = '';
     $('ghLogin').textContent = '—';
+    $('ghEmail').textContent = '';
     $('ghAuthMethod').textContent = '';
     $('ghName').textContent = '—';
   }
@@ -146,6 +160,49 @@ function showAutoUpdate(status) {
     (status.updatesFound ? ` · ${status.updatesFound} update(s) found` : '');
 }
 
+// v3.0 — download the connected local repository as a .zip through the
+// bridge (POST /api/git/archive-zip, bridge v3.0). Disabled state is
+// handled by the caller; here a missing repo is a clear message.
+async function downloadLocalZip() {
+  const s = await settings();
+  if (!s.token) throw new Error('No bridge token saved');
+  const branch = $('branchName').textContent.trim();
+  const repoName = $('repoName').textContent.trim();
+  if (!repoName || repoName === 'No repository selected') throw new Error('Chưa chọn repo');
+  const ref = branch && branch !== '—' ? branch : undefined;
+  const filename = `${repoName}-${ref || 'HEAD'}.zip`;
+  $('message').textContent = 'Downloading ' + filename + '…';
+  $('downloadZipBtn').disabled = true;
+  try {
+    const res = await fetch(s.bridgeUrl + '/api/git/archive-zip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.token },
+      body: JSON.stringify({ ref }),
+    });
+    if (!res.ok) {
+      let detail = 'HTTP ' + res.status;
+      try {
+        const data = await res.json();
+        if (data && data.error) detail = data.error;
+      } catch (_) {}
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      if (typeof a.click === 'function') a.click();
+    } finally {
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 1000);
+    }
+    $('message').textContent = 'Downloaded ' + filename;
+  } finally {
+    $('downloadZipBtn').disabled = false;
+  }
+}
+
 async function refresh() {
   const s = await settings();
   $('token').value = s.token;
@@ -159,6 +216,7 @@ async function refresh() {
     $('repoName').textContent = repo ? repo.name : 'No repository selected';
     $('branchName').textContent = repo && repo.branch ? repo.branch : '—';
     $('repoPath').textContent = repo ? repo.path : 'Open Workspace to select a repository';
+    $('downloadZipBtn').disabled = !repo;
 
     // /health is public, so the token has to be verified separately.
     if (!s.token) {
@@ -208,6 +266,7 @@ async function refresh() {
     $('repoName').textContent = 'No repository selected';
     $('branchName').textContent = '—';
     $('repoPath').textContent = 'Open Workspace to select a repository';
+    $('downloadZipBtn').disabled = true;
     showGithub(null);
   }
 }
@@ -254,6 +313,14 @@ $('autoUpdateToggle').onchange = async () => {
 $('open').onclick = () => {
   chrome.tabs.create({ url: dashboardUrl() });
   window.close();
+};
+
+$('downloadZipBtn').onclick = async () => {
+  try {
+    await downloadLocalZip();
+  } catch (err) {
+    $('message').textContent = err.message;
+  }
 };
 
 document.querySelectorAll('[data-action]').forEach((button) => {

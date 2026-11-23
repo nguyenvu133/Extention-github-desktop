@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v2.1.0
+# PixiJS GitHub Desktop Sync — v3.0.0
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -95,7 +95,7 @@ cd bridge
 Khi chạy đúng, terminal sẽ hiện tương tự:
 
 ```
-PixiJS GitHub Bridge v2.1.0
+PixiJS GitHub Bridge v3.0.0
 Listening: http://127.0.0.1:17321
 Token file: bridge/.bridge-token
 TOKEN:      ab12cd34ef56... (token của bạn)
@@ -212,6 +212,23 @@ chu kỳ tự động.
 ---
 
 ## 6. Đăng nhập GitHub
+
+> **⚠️ Gõ email/mật khẩu vào không nhận? (lỗi hay gặp nhất)**
+> GitHub đã **bỏ xác thực bằng mật khẩu cho app bên thứ ba** — không một app
+> nào được phép nhận mật khẩu GitHub trực tiếp nữa. Vì vậy:
+> - **Đừng gõ email/mật khẩu vào ô Personal Access Token** — ô đó chỉ nhận
+>   **token** (bắt đầu bằng `ghp_…` hoặc `github_pat_…`). Gõ email/mật khẩu
+>   vào đó thì GitHub trả 401 và báo "token rejected". Từ v3.0, dashboard
+>   phát hiện ngay khi bạn dán email/mật khẩu và báo rõ, không gửi request.
+> - **Nút CONNECT GITHUB không có ô mật khẩu nào cả** — nó mở trang
+>   **github.com** để bạn đăng nhập bằng tài khoản thật **trên đó** (kể cả
+>   tài khoản bật 2FA), rồi bấm Authorize. Nếu bấm nút mà báo
+>   `OAUTH_APP_NOT_CONFIGURED` thì bridge chưa có Client ID + Client Secret
+>   của OAuth App — làm theo mục 3, cuối (tạo OAuth App 1 lần duy nhất).
+> - Không biết đăng nhập hỏng ở bước nào? Bấm nút **"Kiểm tra đăng nhập"**
+>   trong khung đăng nhập (v3.0) — bridge kiểm tra từng bước (bridge,
+>   OAuth App, token, scope, rate limit, mạng tới github.com) và chỉ đúng
+>   bước hỏng + cách sửa.
 
 Mở **dashboard** (bấm **Open Workspace** trong popup, hoặc
 `chrome://extensions` → Details → **Extension options**). Nếu chưa đăng nhập,
@@ -330,6 +347,20 @@ hãy dùng **Git local** (mục 9) rồi push, hoặc sửa trên github.com. AP
 sau thêm trình soạn thảo.
 
 ---
+
+### Tải repo về dạng .zip (v3.0)
+
+- **Trong danh sách repo:** mỗi dòng repo có nút **⬇ .zip** (tải branch mặc
+  định của repo đó, kể cả repo private — bridge gửi token kèm request).
+- **Trong trang chi tiết repo:** nút **Tải .zip** ở đầu trang, tải branch
+  đang chọn ở ô branch (mặc định là branch chính của repo).
+- **Repo local (tab Local Git):** nút **Xuất ZIP local** trong panel
+  Push/Pull/Sync — tạo ZIP từ `git archive` của repo đang mở (không cần
+  GitHub, không cần mạng).
+- **Popup:** nút **Tải .zip** tải ZIP của repo local đang chọn (branch hiện
+  tại). Trình duyệt sẽ hiện hộp thoại lưu file `<tên-repo>-<branch>.zip`.
+- Lỗi thường gặp: repo/branch không tồn tại → bridge báo "Không tìm thấy
+  repo hoặc branch"; hết rate limit → đợi tới giờ reset (xem mục 13).
 
 ## 8. Auto-update repo (tự động làm mới)
 
@@ -451,8 +482,8 @@ Extention-github-desktop/
 ├── README.md                      # File này
 ├── .gitignore                     # .bridge-token, .bridge-state.json, .github-config.json, ...
 ├── bridge/
-│   ├── bridge-server.js           # Bridge v2.1: Git local + GitHub API + SSE + auto-update + auto-sync
-│   ├── package.json               # version 2.1.0, scripts start/test/test:v21/test:all
+│   ├── bridge-server.js           # Bridge v3.0: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3
+│   ├── package.json               # version 3.0.0, scripts start/test/test:v21/test:v3/test:all
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   └── start-windows.bat          # Chạy bridge (Windows)
 ├── extension/
@@ -461,14 +492,15 @@ Extention-github-desktop/
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 5 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 6 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
 │   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
-│   ├── extension-test.js          # Test Git local v1 (cần bridge chạy)
+│   ├── bridge-v3-test.js          # Test v3.0: chẩn đoán đăng nhập + zip + API v3 + git local mới
+│   ├── extension-test.js          # Test UI v3.0 (cần bridge chạy)
 │   ├── validate-manifest.js       # Kiểm tra cả 2 manifest
 │   └── load-from-root-test.js     # Kiểm tra Load unpacked từ root/extension
 └── docs/
-    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1 + số liệu test
+    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0 + số liệu test
 ```
 
 ---
@@ -557,6 +589,21 @@ không khớp — copy token mới từ terminal bridge" thay vì chỉ báo chu
 4. Mở DevTools của dashboard (F12) → tab Console xem lỗi; hoặc xem log
    trong terminal bridge.
 
+### Gõ email/mật khẩu vào ô đăng nhập không nhận (v3.0)
+
+- **Đây không phải lỗi của extension.** GitHub đã tắt xác thực bằng mật khẩu
+  cho app bên thứ ba từ 2020. **Không app nào** (kể cả app chính chủ khác)
+  được phép nhận mật khẩu GitHub của bạn trực tiếp.
+- **Cách đúng:** đăng nhập bằng tài khoản thật **trên trang github.com** —
+  bấm **CONNECT GITHUB** (OAuth Web Flow) hoặc **Device Flow** (nhập mã 6 ký
+  tự tại github.com/device). Tài khoản bật 2FA vẫn đăng nhập được bình thường
+  trên github.com.
+- **Hoặc dán token PAT** (không phải mật khẩu): tạo tại
+  <https://github.com/settings/tokens> — token bắt đầu bằng `ghp_…`
+  (classic) hoặc `github_pat_…` (fine-grained), scope `repo` + `read:user`.
+- Bấm **"Kiểm tra đăng nhập"** trong khung đăng nhập để bridge chẩn đoán
+  từng bước và chỉ đúng chỗ hỏng.
+
 ### "Kết nối GitHub" báo "OAuth Web Flow is not configured"
 
 - Bridge chưa có Client ID + Client Secret của OAuth App. Làm theo mục 3,
@@ -625,7 +672,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 5 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 6 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -638,7 +685,8 @@ node tests/validate-manifest.js      # 18 checks: cả 2 manifest hợp lệ, c�
 node tests/load-from-root-test.js    # 7 checks: Load unpacked từ root và từ extension/
 node tests/bridge-v2-test.js         # 58 checks: mock GitHub + bridge thật + dashboard trong vm
 node tests/bridge-v21-test.js        # 107 checks: push/pull trên repo git thật + OAuth Web Flow + auto-sync
-node tests/extension-test.js         # 22 checks: Git local v1 (CẦN bridge đang chạy ở 17321)
+node tests/bridge-v3-test.js         # 108 checks: chẩn đoán đăng nhập + PAT guard + zip + API v3 + git local mới
+node tests/extension-test.js         # 76 checks: Git local + UI v3.0 (CẦN bridge đang chạy ở 17321)
 ```
 
 ### Kết quả đã chạy (2026-11-23, 2 vòng liên tiếp — xem chi tiết trong `docs/BRIDGE_V2.md`)
@@ -647,7 +695,8 @@ node tests/extension-test.js         # 22 checks: Git local v1 (CẦN bridge đa
 |---|---|---|
 | `bridge-v2-test.js` | 58 passed, 0 failed | 58 passed, 0 failed |
 | `bridge-v21-test.js` | 107 passed, 0 failed | 107 passed, 0 failed |
-| `extension-test.js` | ALL CHECKS PASSED (22) | ALL CHECKS PASSED (22) |
+| `bridge-v3-test.js` | 108 passed, 0 failed | 108 passed, 0 failed |
+| `extension-test.js` | ALL CHECKS PASSED (76) | ALL CHECKS PASSED (76) |
 | `validate-manifest.js` | 18/18 | 18/18 |
 | `load-from-root-test.js` | 7/7 | 7/7 |
 
@@ -695,6 +744,18 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.0.0 (2026-11-23)** — Sửa triệt để lỗi đăng nhập + Download .zip +
+  thêm nhiều tính năng: chẩn đoán đăng nhập từng bước
+  (`GET /api/github/login/diagnostics`, 6 check tiếng Việt), PAT chặn ngay
+  email/mật khẩu (`INVALID_TOKEN_FORMAT`), OAuth start báo rõ khi chưa cấu
+  hình App (`OAUTH_APP_NOT_CONFIGURED`), wizard đăng nhập 3 cách không còn
+  ô mật khẩu (Device Flow có đếm ngược, PAT kiểm tra định dạng ở client);
+  Download .zip (repo GitHub kể cả private + archive repo local); quản lý
+  repo (tạo/fork/star/xóa/sửa mô tả), issues (tạo/bình luận/đóng-mở), PRs
+  (tạo/merge/đóng), releases (liệt kê/tạo/tải asset), sửa/xóa/upload file
+  qua API, tìm code trong repo, notifications, trang hồ sơ, git local thêm
+  (cherry-pick/revert/reset/tags), trang Cài đặt. Xem `docs/BRIDGE_V2.md`
+  (mục v3.0.0).
 - **v2.1.0 (2026-11-23)** — Mở rộng push/pull + đăng nhập bằng tài khoản
   GitHub thật: OAuth Web Application Flow (nút "Kết nối GitHub", đăng nhập
   trên github.com, callback về bridge, state chống CSRF dùng một lần,

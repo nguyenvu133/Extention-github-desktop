@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -11,7 +11,7 @@
 <header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v2.1</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.0</small></div>
   </div>
 
   <div class="gh-search">
@@ -21,7 +21,18 @@
   <nav class="gh-nav">
     <button id="navRepos" class="active">Repositories</button>
     <button id="navLocal">Local Git</button>
+    <button id="navProfile">Hồ sơ</button>
+    <button id="navSettings">Cài đặt</button>
   </nav>
+
+  <div class="notif-wrap">
+    <button id="notifBtn" class="mini notif-btn" title="Thông báo GitHub">🔔 <span id="notifBadge" class="badge hidden"></span></button>
+    <div id="notifPanel" class="notif-panel hidden">
+      <div class="row"><h3>THÔNG BÁO</h3><button id="notifCloseBtn" class="mini">✕</button></div>
+      <div id="notifList" class="empty">Chưa tải thông báo.</div>
+      <button id="notifMarkReadBtn" class="full">ĐÁNH DẤU ĐÃ ĐỌC HẾT</button>
+    </div>
+  </div>
 
   <div class="connect" title="Bridge connection state">
     <i id="lamp"></i>
@@ -32,6 +43,7 @@
   <div id="userChip" class="user-chip hidden">
     <img id="userAvatar" class="avatar" alt="" src="">
     <span id="userLogin">—</span>
+    <span id="userEmail" class="user-email hidden" title="Email tài khoản GitHub"></span>
     <span id="userAuthMethod" class="auth-method" title="How you signed in to GitHub"></span>
     <button id="logoutBtn" class="mini" title="Sign out of GitHub">Sign out</button>
   </div>
@@ -41,34 +53,63 @@
 <aside>
 
   <section class="panel" id="loginPanel">
-    <h3>SIGN IN TO GITHUB</h3>
-    <p class="hint">Sign in once — the bridge stores your token on your own machine (<code>bridge/.github-config.json</code>, mode 0600). The extension never sees the token itself.</p>
-    <button id="oauthConnectBtn" class="blue full big">CONNECT GITHUB</button>
-    <p id="oauthConnectHint" class="hint">Sign in with your real GitHub account in the browser (OAuth Web Flow — the recommended way).</p>
-    <details class="oauth-config">
-      <summary>OAUTH APP SETUP (ONE-TIME)</summary>
-      <p class="hint">Create a GitHub OAuth App at <b>github.com → Settings → Developer settings → OAuth Apps → New OAuth App</b>, and paste this callback URL as its <b>Authorization callback URL</b>:</p>
-      <p class="hint"><code id="oauthCallbackUrl">—</code> <button id="oauthCopyCallbackBtn" class="mini" title="Copy the callback URL">Copy</button></p>
-      <p id="oauthConfigStatus" class="hint">OAuth App: not configured yet.</p>
-      <label for="oauthClientId">Client ID</label>
-      <input id="oauthClientId" placeholder="Ov23…" autocomplete="off" spellcheck="false">
-      <label for="oauthClientSecret">Client Secret</label>
-      <input id="oauthClientSecret" type="password" placeholder="Paste the client secret (never shown again)" autocomplete="off" spellcheck="false">
-      <button id="oauthSaveBtn" class="full">SAVE OAUTH APP</button>
-    </details>
-    <div class="divider"><span>or sign in with</span></div>
-    <label for="patInput">Personal Access Token (classic or fine-grained, scope <code>repo</code> + <code>read:user</code>)</label>
-    <input id="patInput" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
-    <button id="loginPatBtn" class="blue full">SIGN IN WITH TOKEN</button>
-    <div class="divider"><span>or</span></div>
-    <button id="deviceFlowBtn" class="full">SIGN IN WITH DEVICE FLOW</button>
-    <div id="deviceBox" class="device hidden">
-      <p class="hint">Open GitHub and enter this code:</p>
-      <b id="deviceCode" class="device-code">—</b>
-      <button id="deviceOpenBtn" class="full">OPEN GITHUB.COM/LOGIN/DEVICE</button>
-      <p id="deviceStatus" class="hint">Waiting for you to approve on GitHub…</p>
+    <h3>ĐĂNG NHẬP GITHUB</h3>
+    <p class="hint">Chọn 1 trong 3 cách bên dưới. <b>Extension không bao giờ hỏi mật khẩu GitHub của bạn</b> — GitHub đã bỏ xác thực mật khẩu cho app bên thứ ba từ năm 2020, mật khẩu chỉ nhập trên chính trang github.com.</p>
+
+    <div class="diag-box">
+      <div class="row"><h3>KIỂM TRA ĐĂNG NHẬP</h3><button id="diagBtn" class="mini">Kiểm tra</button></div>
+      <p id="diagStatus" class="hint">Bấm "Kiểm tra" để xem từng bước đăng nhập: bridge, token, OAuth App, tài khoản — bước nào hỏng sẽ hiện cách sửa.</p>
+      <div id="diagList"></div>
     </div>
-    <p class="hint">Create a token at <b>github.com → Settings → Developer settings → Personal access tokens</b>. Give it <code>repo</code> scope to read private repositories.</p>
+
+    <!-- Cách 1: OAuth Web Flow -->
+    <div class="wizard-step">
+      <h3>CÁCH 1 — CONNECT GITHUB (KHUYÊN DÙNG)</h3>
+      <p class="hint">Bạn sẽ đăng nhập bằng tài khoản GitHub của mình <b>TRÊN TRANG github.com</b> — extension không bao giờ hỏi mật khẩu của bạn.</p>
+      <p class="hint">Tài khoản của bạn trên github.com (ví dụ tài khoản dùng email <b>nguyenvu16592b@gmail.com</b>) — email này chỉ hiện ở đây để bạn nhận ra tài khoản, <b>KHÔNG gửi đi đâu, KHÔNG lưu làm mật khẩu</b>.</p>
+      <button id="oauthConnectBtn" class="blue full big">CONNECT GITHUB</button>
+      <p id="oauthConnectHint" class="hint">Sign in with your real GitHub account in the browser (OAuth Web Flow — the recommended way).</p>
+      <details class="oauth-config" id="oauthConfigDetails">
+        <summary>CÁCH 1 — CẤU HÌNH OAUTH APP (MỘT LẦN DUY NHẤT)</summary>
+        <p class="hint">Tạo GitHub OAuth App tại <b>github.com → Settings → Developer settings → OAuth Apps → New OAuth App</b>, và dán URL callback này vào ô <b>Authorization callback URL</b> của app:</p>
+        <p class="hint"><code id="oauthCallbackUrl">—</code> <button id="oauthCopyCallbackBtn" class="mini" title="Copy the callback URL">Copy</button></p>
+        <p id="oauthConfigStatus" class="hint">OAuth App: not configured yet.</p>
+        <label for="oauthClientId">Client ID</label>
+        <input id="oauthClientId" placeholder="Ov23…" autocomplete="off" spellcheck="false">
+        <label for="oauthClientSecret">Client Secret</label>
+        <input id="oauthClientSecret" type="password" placeholder="Paste the client secret (never shown again)" autocomplete="off" spellcheck="false">
+        <button id="oauthSaveBtn" class="full">SAVE OAUTH APP</button>
+      </details>
+    </div>
+
+    <div class="divider"><span>hoặc</span></div>
+
+    <!-- Cách 2: Device Flow -->
+    <div class="wizard-step">
+      <h3>CÁCH 2 — DEVICE FLOW (DỄ NHẤT)</h3>
+      <p class="hint">Chỉ cần Client ID của OAuth App. Bạn nhập mã code trên trang github.com — tài khoản có bật 2FA vẫn đăng nhập được trên github.com.</p>
+      <button id="deviceFlowBtn" class="full">SIGN IN WITH DEVICE FLOW</button>
+      <div id="deviceBox" class="device hidden">
+        <p class="hint">Mở GitHub và nhập mã này:</p>
+        <b id="deviceCode" class="device-code">—</b>
+        <p id="deviceCountdown" class="hint device-countdown"></p>
+        <button id="deviceOpenBtn" class="full">OPEN GITHUB.COM/LOGIN/DEVICE</button>
+        <p id="deviceStatus" class="hint">Waiting for you to approve on GitHub…</p>
+      </div>
+    </div>
+
+    <div class="divider"><span>hoặc</span></div>
+
+    <!-- Cách 3: PAT -->
+    <div class="wizard-step">
+      <h3>CÁCH 3 — TOKEN PAT</h3>
+      <p class="hint">Tạo token tại <a id="patCreateLink" href="https://github.com/settings/tokens/new" target="_blank" rel="noopener">github.com → Settings → Developer settings → Personal access tokens → Generate new token</a>. Cần scope <code>repo</code> + <code>read:user</code>.</p>
+      <label for="patInput">Token — KHÔNG phải mật khẩu GitHub</label>
+      <input id="patInput" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
+      <p id="patWarning" class="pat-warning hidden"></p>
+      <button id="loginPatBtn" class="blue full">SIGN IN WITH TOKEN</button>
+      <p class="hint">Token bắt đầu bằng <code>ghp_…</code> (classic) hoặc <code>github_pat_…</code> (fine-grained). <b>Không dán email hay mật khẩu vào đây</b> — GitHub không cho app khác nhập mật khẩu.</p>
+    </div>
   </section>
 
   <section class="panel">
@@ -167,6 +208,17 @@
 
       <div id="repoList" class="empty">Sign in to GitHub to list your repositories.</div>
     </div>
+
+    <div class="panel">
+      <div class="row"><h2>TẠO REPOSITORY MỚI</h2></div>
+      <label for="createRepoName">Tên repository</label>
+      <input id="createRepoName" placeholder="my-new-repo" spellcheck="false" autocomplete="off">
+      <label for="createRepoDesc">Mô tả (không bắt buộc)</label>
+      <input id="createRepoDesc" placeholder="What does this repo do?" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="createRepoPrivate"> Private (mặc định là Public)</label>
+      <button id="createRepoBtn" class="blue full">CREATE REPOSITORY</button>
+      <p class="hint">Repo mới được tạo kèm README trống (auto_init).</p>
+    </div>
   </div>
 
   <!-- ============ REPO DETAIL ============ -->
@@ -185,6 +237,14 @@
           <span title="Open issues">◉ <b id="detailIssues">0</b></span>
         </div>
       </div>
+      <div class="row-actions repo-actions">
+        <button id="repoZipBtn" class="blue">⬇ Tải .zip</button>
+        <button id="repoStarBtn">★ Star</button>
+        <button id="repoUnstarBtn">☆ Unstar</button>
+        <button id="repoForkBtn">⑂ Fork</button>
+        <button id="repoEditDescBtn">Sửa mô tả</button>
+        <button id="repoDeleteBtn" class="danger" title="Delete this repository on GitHub">Xóa repo</button>
+      </div>
       <div class="tabs">
         <button data-tab="overview" class="active">Overview</button>
         <button data-tab="files">Files</button>
@@ -192,6 +252,7 @@
         <button data-tab="branches">Branches</button>
         <button data-tab="issues">Issues</button>
         <button data-tab="pulls">Pull requests</button>
+        <button data-tab="releases">Releases</button>
       </div>
 
       <div id="tab-overview" class="tabpane">
@@ -208,11 +269,31 @@
           </div>
         </div>
         <p class="hint">Path: <b id="filePathLabel">/</b></p>
+        <div class="toolbar">
+          <input id="codeSearchInput" type="search" placeholder="Tìm code trong repo…" spellcheck="false" autocomplete="off">
+          <button id="codeSearchBtn">Tìm code</button>
+        </div>
+        <div id="codeSearchResults" class="hidden"></div>
         <div id="fileTree" class="empty">Select a repository to browse its files.</div>
         <div id="fileViewerWrap" class="hidden">
           <div class="row"><h3 id="fileViewerName">—</h3><span id="fileViewerMeta" class="hint"></span></div>
           <pre id="fileViewer">Select a file to view it.</pre>
+          <div id="fileEditWrap" class="hidden">
+            <label for="fileEditArea">Sửa file (lưu sẽ commit lên branch đang chọn)</label>
+            <textarea id="fileEditArea" rows="10" spellcheck="false"></textarea>
+            <div class="row-actions sync-actions">
+              <button id="fileSaveBtn" class="blue">LƯU FILE</button>
+              <button id="fileDeleteBtn" class="danger">Xóa file</button>
+            </div>
+          </div>
         </div>
+        <div class="divider"><span>tạo file / tải file lên</span></div>
+        <label for="newFileName">Tạo file mới (tại thư mục đang mở)</label>
+        <input id="newFileName" placeholder="notes.txt" spellcheck="false">
+        <textarea id="newFileContent" rows="3" placeholder="Nội dung file…" spellcheck="false"></textarea>
+        <button id="newFileBtn" class="full">TẠO FILE</button>
+        <label for="fileUploadInput">Tải file lên (tại thư mục đang mở)</label>
+        <input id="fileUploadInput" type="file">
       </div>
 
       <div id="tab-commits" class="tabpane hidden">
@@ -228,12 +309,117 @@
       <div id="tab-issues" class="tabpane hidden">
         <div class="row"><h3>OPEN ISSUES</h3><button id="reloadIssues" class="mini">Refresh</button></div>
         <div id="issueList" class="empty">No issues loaded.</div>
+        <div id="issueDetail" class="hidden">
+          <div class="row">
+            <h3 id="issueDetailTitle">—</h3>
+            <button id="issueDetailBackBtn" class="mini">← Back to issues</button>
+          </div>
+          <p id="issueDetailMeta" class="hint"></p>
+          <pre id="issueDetailBody" class="readme">(No description)</pre>
+          <h3>BÌNH LUẬN</h3>
+          <div id="issueComments" class="empty">No comments yet.</div>
+          <label for="commentBody">Viết bình luận</label>
+          <textarea id="commentBody" rows="3" placeholder="Bình luận…" spellcheck="false"></textarea>
+          <div class="row-actions sync-actions">
+            <button id="addCommentBtn" class="blue">GỬI BÌNH LUẬN</button>
+            <button id="issueCloseBtn">Close issue</button>
+          </div>
+        </div>
+        <div class="divider"><span>tạo issue mới</span></div>
+        <label for="issueTitle">Tiêu đề issue</label>
+        <input id="issueTitle" placeholder="Bug: …" spellcheck="false">
+        <label for="issueBody">Nội dung</label>
+        <textarea id="issueBody" rows="3" placeholder="Mô tả…" spellcheck="false"></textarea>
+        <label for="issueLabels">Labels (cách nhau bằng dấu phẩy)</label>
+        <input id="issueLabels" placeholder="bug, help wanted" spellcheck="false">
+        <button id="createIssueBtn" class="blue full">TẠO ISSUE</button>
       </div>
 
       <div id="tab-pulls" class="tabpane hidden">
-        <div class="row"><h3>OPEN PULL REQUESTS</h3><button id="reloadPulls" class="mini">Refresh</button></div>
+        <div class="row"><h3>OPEN PULL REQUESTS</h3>
+          <div class="row-actions">
+            <label for="prMergeMethod" class="inline-label">Merge kiểu:</label>
+            <select id="prMergeMethod" title="Merge method used by the Merge button on each PR">
+              <option value="merge">merge</option>
+              <option value="squash">squash</option>
+              <option value="rebase">rebase</option>
+            </select>
+            <button id="reloadPulls" class="mini">Refresh</button>
+          </div>
+        </div>
         <div id="pullList" class="empty">No pull requests loaded.</div>
+        <div class="divider"><span>tạo pull request mới</span></div>
+        <label for="prTitle">Tiêu đề PR</label>
+        <input id="prTitle" placeholder="Add feature…" spellcheck="false">
+        <div class="sync-grid">
+          <label for="prHead">Head (nhánh nguồn)</label>
+          <input id="prHead" placeholder="feature/my-change" spellcheck="false">
+          <label for="prBase">Base (nhánh đích)</label>
+          <input id="prBase" placeholder="main" spellcheck="false">
+        </div>
+        <label for="prBody">Nội dung</label>
+        <textarea id="prBody" rows="3" placeholder="Mô tả thay đổi…" spellcheck="false"></textarea>
+        <button id="createPrBtn" class="blue full">TẠO PULL REQUEST</button>
       </div>
+
+      <div id="tab-releases" class="tabpane hidden">
+        <div class="row"><h3>RELEASES</h3><button id="reloadReleases" class="mini">Refresh</button></div>
+        <div id="releaseList" class="empty">No releases loaded.</div>
+        <div class="divider"><span>tạo release mới</span></div>
+        <label for="releaseTag">Tag (ví dụ v1.0.0)</label>
+        <input id="releaseTag" placeholder="v1.0.0" spellcheck="false">
+        <label for="releaseName">Tên release</label>
+        <input id="releaseName" placeholder="Release 1.0.0" spellcheck="false">
+        <label for="releaseBody">Ghi chú</label>
+        <textarea id="releaseBody" rows="3" placeholder="What's new…" spellcheck="false"></textarea>
+        <label class="check-row"><input type="checkbox" id="releaseDraft"> Draft (bản nháp)</label>
+        <label class="check-row"><input type="checkbox" id="releasePrerelease"> Pre-release</label>
+        <button id="createReleaseBtn" class="blue full">TẠO RELEASE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PROFILE ============ -->
+  <div id="view-profile" class="view hidden">
+    <div class="panel">
+      <div class="row"><h2>HỒ SƠ GITHUB</h2><button id="reloadProfile" class="mini">Refresh</button></div>
+      <div class="profile-card">
+        <img id="profileAvatar" class="profile-avatar" alt="" src="">
+        <div>
+          <h2 id="profileName">—</h2>
+          <p id="profileLogin" class="hint">—</p>
+          <p id="profileEmail" class="hint">—</p>
+        </div>
+      </div>
+      <p id="profileBio" class="hint">—</p>
+      <div class="meta">
+        <small>CÔNG TY</small><b id="profileCompany">—</b>
+        <small>BLOG</small><b id="profileBlog">—</b>
+        <small>VỊ TRÍ</small><b id="profileLocation">—</b>
+      </div>
+      <p id="profileStats" class="hint">Sign in to GitHub to load your profile.</p>
+      <a id="profileLink" class="hidden" href="#" target="_blank" rel="noopener">—</a>
+    </div>
+  </div>
+
+  <!-- ============ SETTINGS ============ -->
+  <div id="view-settings" class="view hidden">
+    <div class="panel">
+      <div class="row"><h2>CÀI ĐẶT</h2></div>
+      <label for="settingsInterval">Khoảng thời gian auto-update</label>
+      <select id="settingsInterval">
+        <option value="15">every 15s</option>
+        <option value="30">every 30s</option>
+        <option value="60" selected>every 1 min</option>
+        <option value="300">every 5 min</option>
+        <option value="900">every 15 min</option>
+      </select>
+      <label for="settingsDefaultBranch">Nhánh mặc định (dùng khi mở cây file của repo)</label>
+      <input id="settingsDefaultBranch" placeholder="main — để trống = nhánh mặc định của repo" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="settingsAutoSync"> Bật auto-sync (tự pull khi repo có commit mới)</label>
+      <label class="check-row"><input type="checkbox" id="settingsNotifications" checked> Bật thông báo (hiện badge số chưa đọc trên chuông)</label>
+      <button id="saveSettingsBtn" class="blue full">LƯU CÀI ĐẶT</button>
+      <p id="settingsStatus" class="hint"></p>
     </div>
   </div>
 
@@ -295,6 +481,7 @@
         <button id="pull">Pull</button>
         <button id="push" class="blue">Push</button>
         <button id="syncBtn" class="blue" title="Fetch, then pull, then push — one click">Sync</button>
+        <button id="localZipBtn" title="Export the local repository as a .zip">⬇ Xuất ZIP local</button>
       </div>
       <label class="check-row"><input type="checkbox" id="setUpstreamCheck"> Set upstream on push (<code>-u</code>)</label>
       <label class="check-row"><input type="checkbox" id="forcePushCheck"> Force-push with lease</label>
@@ -347,6 +534,49 @@
         <button id="commitMergeBtn" title="Commit the merge after every conflict is resolved">Commit merge</button>
       </div>
       <div id="conflictList" class="empty">No merge conflicts.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>CHERRY-PICK / REVERT / RESET</h2>
+      </div>
+      <label for="cpSha">Commit SHA (đầy đủ hoặc 7 ký tự đầu)</label>
+      <input id="cpSha" placeholder="abc1234" spellcheck="false" autocomplete="off">
+      <div class="row-actions sync-actions">
+        <button id="cherryPickBtn">Cherry-pick</button>
+        <button id="revertBtn">Revert</button>
+      </div>
+      <label for="resetMode">Reset mode</label>
+      <select id="resetMode">
+        <option value="soft">soft — giữ thay đổi đã stage</option>
+        <option value="mixed" selected>mixed — giữ thay đổi, bỏ stage</option>
+        <option value="hard">hard — HỦY mọi thay đổi chưa commit</option>
+      </select>
+      <label for="resetRef">Reset tới (ref)</label>
+      <input id="resetRef" placeholder="HEAD — hoặc SHA / tên branch" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="resetHardConfirm"> Tôi hiểu hard reset sẽ hủy mọi thay đổi chưa commit</label>
+      <button id="resetBtn" class="full">RESET</button>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>TAGS</h2>
+        <button id="refreshTagsBtn" class="mini">Refresh</button>
+      </div>
+      <div id="tagList" class="empty">No tags yet.</div>
+      <label for="newTagName">Tạo tag mới</label>
+      <input id="newTagName" placeholder="v1.0.0" spellcheck="false">
+      <label for="newTagMessage">Ghi chú tag (không bắt buộc)</label>
+      <input id="newTagMessage" placeholder="First release" spellcheck="false">
+      <label for="newTagRef">Tạo tại (ref — để trống = HEAD)</label>
+      <input id="newTagRef" placeholder="HEAD" spellcheck="false">
+      <button id="createTagBtn" class="full">TẠO TAG</button>
+      <label for="deleteTagName">Xóa tag (local)</label>
+      <input id="deleteTagName" placeholder="v0.9.0" spellcheck="false">
+      <button id="deleteTagBtn" class="full">XÓA TAG</button>
+      <label for="pushTagName">Push tag lên remote</label>
+      <input id="pushTagName" placeholder="v1.0.0" spellcheck="false">
+      <button id="pushTagBtn" class="full">PUSH TAG</button>
     </div>
 
     <div class="panel">

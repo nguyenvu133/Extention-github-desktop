@@ -416,3 +416,217 @@ hiện trong bất kỳ response nào, file `.github-oauth.json` mode 0600.
   Chrome + tạo OAuth App theo README mục 3/6).
 - Toàn bộ panel Push/Pull mới trên Chrome thật (pull rebase, force-with-lease,
   resolve conflict bằng tay).
+
+---
+
+## 6. v3.0.0 — Sửa đăng nhập + Download .zip + thêm tính năng
+
+> Phiên bản: **3.0.0** · Ngày: 2026-11-23 · Head trước khi làm: `571ac3c` (v2.1.0)
+> Giữ nguyên toàn bộ tính năng v2.1.0, chỉ thêm mới / sửa lỗi đăng nhập.
+
+### 6.1. Chẩn đoán lỗi đăng nhập — "gõ email/mật khẩu vào không nhận"
+
+**Báo cáo của user:** nút Connect GitHub không kết nối được tài khoản
+`nguyenvu16592b@gmail.com` — gõ ID/mật khẩu vào không nhận.
+
+**Nguyên nhân (đã xác minh bằng tài liệu công khai của GitHub):**
+GitHub đã **bỏ xác thực bằng mật khẩu cho app bên thứ ba từ tháng 11/2020**
+(basic authentication bằng mật khẩu bị tắt hoàn toàn) — không một app nào
+được phép nhận mật khẩu GitHub trực tiếp nữa. Vì vậy:
+
+- Ô **Personal Access Token** trong extension chỉ nhận **token** (bắt đầu
+  bằng `ghp_…` hoặc `github_pat_…`). Gõ email/mật khẩu vào đó thì bridge
+  thử gọi `GET /user` với chuỗi đó làm token → GitHub trả 401 → báo lỗi
+  chung chung "token rejected". Đó chính là điều user gặp phải.
+- Nút **Connect GitHub** (OAuth Web Flow) không có ô mật khẩu nào cả: nó
+  mở **trang github.com** để user đăng nhập bằng tài khoản thật trên đó.
+  Nhưng ở v2.1, nếu bridge **chưa cấu hình OAuth App** (chưa có Client ID
+  + Client Secret) thì `/oauth/start` chỉ trả lỗi chung chung, user không
+  biết phải làm gì — cũng trông giống như "bấm Connect GitHub không được".
+
+**Cách đúng (3 cách, không cách nào hỏi mật khẩu GitHub trong extension):**
+
+1. **Connect GitHub (OAuth Web Flow, khuyên dùng):** tạo OAuth App một lần
+   (README mục 3) → nhập Client ID + Secret → bấm CONNECT GITHUB → đăng
+   nhập bằng tài khoản thật **trên trang github.com** → Authorize.
+2. **Device Flow (dễ nhất, chỉ cần Client ID):** bấm nút → hiện mã 6 ký tự
+   → mở github.com/device → đăng nhập + nhập mã → Authorize. Tài khoản
+   bật 2FA vẫn đăng nhập được trên github.com.
+3. **Token PAT:** tạo token tại github.com → Settings → Developer settings
+   → Personal access tokens (dạng `ghp_…` / `github_pat_…`, scope `repo` +
+   `read:user`) → dán token vào ô PAT.
+
+**Sửa trong v3.0 (bridge + extension):**
+
+- Bridge: `POST /api/github/auth` phát hiện ngay input không phải token
+  (chứa `@`/khoảng trắng, hoặc không bắt đầu bằng `ghp_/github_pat_/gho_/
+  ghu_/ghs_/ghr_`) → trả `400 {error, code: 'INVALID_TOKEN_FORMAT'}`
+  với thông báo tiếng Việt giải thích token bắt đầu bằng gì + link tạo
+  token. Thêm helper `fail(code, message)` (Error mang `.code`) và catch
+  cuối file trả cả `code` trong JSON. `GET /api/github/oauth/start` khi
+  chưa cấu hình OAuth App → `400 {code: 'OAUTH_APP_NOT_CONFIGURED'}`
+  kèm các bước sửa, thay cho lỗi chung.
+- Bridge: `GET /api/github/login/diagnostics` (mới) — kiểm tra từng bước
+  và trả checklist tiếng Việt: bridge đang chạy, OAuth App đã cấu hình
+  chưa, token có/không + còn hiệu lực không (gọi `GET /user`, 401 →
+  "Đăng nhập lại"), scope có `repo` không, rate limit còn lại, tới được
+  github.com không (fetch `GITHUB_OAUTH_BASE/` timeout 5 s).
+  Trả `{ok, authed, login, checks: [{key, label, ok, detail, fix}], summary}`.
+- Extension: `#loginPanel` viết lại thành **wizard 3 cách tiếng Việt,
+  không còn ô mật khẩu GitHub nào** (ô PAT vẫn `type=password` nhưng nhãn
+  ghi rõ "Token — KHÔNG phải mật khẩu GitHub"). Gợi ý tài khoản
+  (`nguyenvu16592b@gmail.com`) chỉ là **chữ gợi ý trong UI local** để user
+  nhận ra tài khoản của mình — không gửi tới API nào, không lưu làm
+  credential. PAT kiểm tra định dạng ngay ở client bằng hàm thuần
+  `looksLikeGithubToken()` (dán email/mật khẩu → cảnh báo đỏ + không gửi
+  request). Panel chẩn đoán `#diagList` + nút "Kiểm tra đăng nhập", tự
+  chạy khi đăng nhập lỗi. Device Flow thêm đếm ngược. Chip tài khoản hiện
+  thêm email (`publicUser()` thêm `email`).
+- Sửa bug có sẵn phát hiện khi test: `noteRateLimit()` — header rate-limit
+  vắng mặt trả `null`, mà `Number(null) === 0` nên mọi response không có
+  header đều ghi nhầm "còn 0 request" → diagnostics check rate-limit fail.
+  Sửa: guard null/'' → NaN, chỉ ghi khi header thật sự có.
+
+### 6.2. Download .zip (mới)
+
+- `GET /api/github/repos/:owner/:repo/zip?ref=<branch>` (cần GitHub auth,
+  đặt trước khối repoMatch): fetch từ codeload
+  (`https://codeload.github.com/:owner/:repo/zip/refs/heads/:ref`, ref
+  mặc định = default_branch; SHA 40 hex dùng dạng `/zip/:ref`), kèm
+  `Authorization: Bearer` nên **repo private cũng tải được**. Base qua env
+  `GITHUB_CODELOAD_BASE` (mặc định codeload.github.com) để test dùng mock
+  local. Stream body về client bằng `Readable.fromWeb`, header
+  `Content-Type: application/zip` + `Content-Disposition: attachment;
+  filename="<repo>-<ref>.zip"`. 404 → "Không tìm thấy repo hoặc branch",
+  403 → thông báo rate limit.
+- `POST /api/git/archive-zip` `{ref?}` (cần repo local): `git archive
+  --format=zip <ref>` qua helper mới `runGitBuffer()` (thu Buffer, không
+  qua string — ZIP là nhị phân, `runGit` trả string sẽ hỏng), trả ZIP tên
+  `<tên-repo>-<ref>.zip`.
+- Extension: helper `downloadBlob()` (fetch kèm Bearer token, lỗi đọc JSON
+  rồi throw, blob → `<a download>` → thu hồi URL, disable nút lúc tải).
+  Nút "⬇ .zip" ở **mỗi dòng repo** trong danh sách, nút "Tải .zip" ở đầu
+  **trang chi tiết repo** (dùng branch đang chọn), nút "Tải .zip" ở
+  **popup** (archive local, ref = branch hiện tại), nút "Xuất ZIP local"
+  ở panel Push/Pull/Sync của tab Local Git.
+
+### 6.3. API GitHub v3.0 (mới)
+
+Khối repoMatch mở sang POST/DELETE/PATCH (đọc body cho PATCH/DELETE, CORS
+thêm PATCH/DELETE). Thêm normalizer `normalizePull/normalizeComment/
+normalizeRelease`.
+
+| Nhóm | Route mới | Ghi chú |
+|---|---|---|
+| Repo | `POST /api/github/repos` `{name, description, private, auto_init}` | Tạo repo (tên regex `^[A-Za-z0-9._-]+$`) |
+| Repo | `PATCH /api/github/repos/:owner/:repo` `{description?, private?}` | Sửa mô tả / đổi public-private |
+| Repo | `DELETE /api/github/repos/:owner/:repo` `{confirm: true}` | Xoá repo, bắt buộc confirm |
+| Repo | `POST /api/github/repos/:owner/:repo/fork` | Fork về tài khoản của bạn |
+| Repo | `PUT/DELETE /api/github/repos/:owner/:repo/star` | Star / unstar |
+| Issues | `POST .../issues` `{title, body, labels[]}`; `GET .../issues/:number` (kèm comments); `POST .../issues/:number/comments` `{body}`; `PATCH .../issues/:number` `{state}` | Tạo / xem chi tiết + bình luận / bình luận / đóng-mở |
+| PRs | `POST .../pulls` `{title, head, base?, body}`; `PUT .../pulls/:number/merge` `{merge_method?}`; `PATCH .../pulls/:number` `{state}` | Tạo PR (base mặc định = default_branch), merge (merge/squash/rebase), đóng |
+| Releases | `GET .../releases`; `POST .../releases` `{tag_name, name, body, draft, prerelease}`; `GET .../releases/assets/:assetId?name=` | Liệt kê / tạo / tải asset (stream binary, Accept: application/octet-stream) |
+| File | `PUT .../contents` thêm `contentBase64` | Upload file (kể cả nhị phân) |
+| File | `DELETE .../contents` `{path, message, sha, branch?}` | Xoá file (cần sha hiện tại) |
+| Search | `GET /api/github/search/code?q=&repo=` | Tìm code trong repo (thêm `repo:owner/repo` vào query) |
+| Notify | `GET /api/github/notifications`; `POST /api/github/notifications/read` | Liệt kê chưa đọc / đánh dấu đã đọc hết |
+| Profile | `GET /api/github/profile` | Đầy đủ: login, name, email, bio, company, blog, location, repos/followers/following, created_at |
+
+### 6.4. Git local thêm (v3.0)
+
+| Route | Ghi chú |
+|---|---|
+| `POST /api/git/cherry-pick` `{sha}` | SHA hex 4–40; conflict → HTTP 200 `{ok:false, conflict:true, conflicts}` |
+| `POST /api/git/revert` `{sha}` | `git revert --no-edit`; conflict → cùng dạng trên |
+| `POST /api/git/reset` `{mode: soft\|mixed\|hard, ref, confirm?}` | Hard bắt buộc `confirm: true` (xoá thay đổi chưa commit); ref = SHA / HEAD / HEAD~n / tên branch |
+| `GET /api/git/tags` | Liệt kê tag kèm sha từng tag (best-effort) |
+| `POST /api/git/tag/create` `{name, message?, ref?}` | Annotated nếu có message, không thì lightweight |
+| `POST /api/git/tag/delete` `{name}` | `git tag -d` |
+| `POST /api/git/tag/push` `{name, remote?}` | Push tag lên remote (mặc định origin) |
+
+### 6.5. Extension UI v3.0 (dashboard ~2.050 → ~2.684 dòng)
+
+- Wizard đăng nhập (mục 6.1) + panel chẩn đoán + đếm ngược Device Flow +
+  chip tài khoản hiện email.
+- Download .zip (mục 6.2).
+- Form tạo repo; Star/Unstar riêng, Fork, sửa mô tả (prompt), xoá repo
+  (confirm 2 lần + `{confirm: true}`); tab **Releases** (liệt kê + tạo từ
+  tag + tải asset); tab Files mở rộng (sửa file + Lưu với sha, tạo file
+  mới, xoá file confirm, upload file → base64 → `contentBase64`); Issues
+  (tạo issue, xem chi tiết + bình luận + Đóng/Mở lại); Pulls (tạo PR
+  head/base, Merge với select merge/squash/rebase + Đóng); tìm code trong
+  repo; chuông thông báo header (`#notifBtn` + badge chưa đọc + panel +
+  "Đánh dấu đã đọc hết"); nav **Hồ sơ** (`#view-profile`); nav **Cài đặt**
+  (`#view-settings`: khoảng auto-update, nhánh mặc định, auto-sync,
+  bật/tắt thông báo — lưu `chrome.storage.local`, key mới
+  `settingsDefaultBranch`, `settingsNotifications`, áp dụng khi boot);
+  Local Git thêm panel Cherry-pick/Revert/Reset (hard reset cần checkbox
+  xác nhận) và panel Tags.
+- Popup: nút "Tải .zip" (archive local), chip tài khoản hiện email.
+
+### 6.6. File đã sửa / tạo (v3.0.0)
+
+- Sửa: `bridge/bridge-server.js` (2.312 → 2.934 dòng),
+  `bridge/package.json` (3.0.0 + script `test:v3`),
+  `extension/dashboard.js` (1.746 → 2.684 dòng),
+  `extension/dashboard.html`, `extension/dashboard.css`,
+  `extension/popup.js`, `extension/popup.html`, `extension/popup.css`,
+  `manifest.json` + `extension/manifest.json` (2.1.0 → 3.0.0),
+  `tests/run-all.js` (thêm suite v3), `tests/bridge-v2-test.js` (2 check
+  version 2.1.0 → 3.0.0 — assertion cũ hardcode version), 
+  `tests/bridge-v21-test.js` (1 check OAuth: `/not configured/i` →
+  `code === 'OAUTH_APP_NOT_CONFIGURED'` — thông báo lỗi giờ là tiếng Việt
+  theo đúng yêu cầu v3.0), `README.md`, `docs/BRIDGE_V2.md`.
+- Mới: `tests/bridge-v3-test.js` (108 checks).
+
+### 6.7. Kiểm thử v3.0 — số liệu từng vòng
+
+`tests/bridge-v3-test.js` (node, mock GitHub local cổng 17403 — API +
+OAuth device + codeload — + bridge thật cổng 17397, bridge thứ 2 cổng
+17396 với `GITHUB_OAUTH_BASE` trỏ cổng chết để test unreachable; repo
+git thật cho cherry-pick/revert/reset/tags; **không gọi api.github.com
+thật**):
+
+- **Vòng 1 (chạy riêng): 108/108 pass** — diagnostics đủ đường, OAuth
+  start chưa cấu hình → code `OAUTH_APP_NOT_CONFIGURED`, PAT dạng
+  email/mật khẩu/chuỗi ngẫu nhiên → `INVALID_TOKEN_FORMAT`, Device Flow
+  mock đủ vòng, zip download mock (đúng bytes, đúng tên file, 404 rõ) +
+  git archive thật (2 byte đầu `PK` + tên file trong ZIP), repo
+  create/fork/star/delete mock, issues/PRs/releases mock, sửa file
+  `contentBase64` + xóa file mock, code search, notifications,
+  profile (có email), git cherry-pick/revert/reset/tags thật. Trong vòng
+  này bắt được bug `noteRateLimit()` (mục 6.1, cuối) và đã sửa.
+- **Vòng 2 (`node tests/run-all.js`, lần 1): ALL SUITES PASSED** —
+  validate-manifest 18/18, load-from-root 7/7, bridge-v2-test 58/58,
+  bridge-v21-test 107/107, bridge-v3-test 108/108, extension-test
+  ALL CHECKS PASSED (76).
+- **Vòng 3 (`node tests/run-all.js`, lần 2): ALL SUITES PASSED** —
+  kết quả giống hệt vòng 2 (tổng 374 dòng PASS).
+- **Vòng 4 (chạy lẻ từng suite, do parent tích hợp):** bridge-v2-test
+  58/58, bridge-v21-test 107/107, bridge-v3-test 108/108,
+  validate-manifest 18/18, load-from-root 7/7, extension-test
+  ALL CHECKS PASSED.
+- Lưu ý: lần đầu chạy `run-all` sau khi bump version, 3 check cũ fail
+  vì assertion hardcode giá trị tiền-v3 (2 check version `'2.1.0'` trong
+  bridge-v2-test, 1 check thông báo tiếng Anh trong bridge-v21-test) —
+  đã cập nhật 3 dòng assertion đó (mục 6.6), không phải lỗi code mới.
+
+`tests/extension-test.js` (node, dashboard.js/popup.js nguyên vẹn trong
+vm + bridge thật): **76/76 check, 0 fail, chạy 3 vòng** (17 check cũ +
+7 popup + 59 check mới: `looksLikeGithubToken` đúng/sai 7 trường hợp,
+cảnh báo khi dán email làm PAT, diagnostics render mềm khi bridge 404,
+36 hàm v3.0 tồn tại, chuyển view Profile/Settings, lưu settings vào
+storage). `validate-manifest` + `load-from-root-test` cũng pass.
+
+### 6.8. Chưa kiểm chứng bằng tay
+
+- Đăng nhập bằng tài khoản GitHub thật trên github.com thật (chỉ mock
+  local): OAuth Web Flow với OAuth App thật, Device Flow thật, PAT thật.
+- Tải zip repo private thật; tải asset release thật.
+- Toàn bộ UI v3.0 trên Chrome thật: wizard đăng nhập, đếm ngược Device
+  Flow, tải file .zip (trình duyệt phải hiện hộp thoại lưu file), upload
+  file, badge chuông thông báo, trang Hồ sơ / Cài đặt.
+- Các route v3.0 mới chỉ mới kiểm tra tồn tại hàm + gọi đúng route ở phía
+  extension (bridge v2.1 trả 404 thì UI xử lý mềm, không vỡ); end-to-end
+  với bridge v3.0 đã được kiểm tra ở phía bridge (108/108) nhưng chưa
+  click thật trên Chrome.

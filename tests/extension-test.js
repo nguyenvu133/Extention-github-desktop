@@ -8,6 +8,12 @@
  * This exercises the actual extension code paths (api(), health(), status(),
  * branches(), history(), commit, stage, diff) without a browser.
  *
+ * v3.0 additions: looksLikeGithubToken shape checks, login-diagnostics
+ * rendering (soft-skips when the bridge is older than v3.0 and lacks the
+ * route), the downloadBlob helper, and existence checks for the v3.0
+ * functions (repos/releases/issues/pulls/notifications/profile/settings/
+ * cherry-pick/revert/reset/tags/local .zip).
+ *
  * The harness is self-contained: it creates its own throwaway Git repository
  * in the OS temp directory, so it can be run repeatedly and never depends on
  * (or mutates) any repository you already have.
@@ -154,7 +160,7 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '2.0.0' }),
+      getManifest: () => ({ version: '3.0.0' }),
       getURL: (p) => 'chrome-extension://test/' + p,
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },
@@ -171,9 +177,9 @@ const DASHBOARD_IDS = [
   'diffFile', 'changes', 'history', 'saveConnection', 'connectRepo',
   'refreshStatus', 'stageAll', 'unstageAll', 'commit', 'fetch', 'pull',
   'push', 'switchBranch', 'loadHistory', 'copyPath', 'reconnectBtn',
-  'userChip', 'userAvatar', 'userLogin', 'logoutBtn', 'loginPanel', 'patInput', 'loginPatBtn',
-  'deviceFlowBtn', 'deviceBox', 'deviceCode', 'deviceOpenBtn', 'deviceStatus', 'rateLimit',
-  'view-repos', 'view-repo', 'view-local', 'navRepos', 'navLocal', 'globalSearch',
+  'userChip', 'userAvatar', 'userLogin', 'userEmail', 'logoutBtn', 'loginPanel', 'patInput', 'patWarning', 'patCreateLink', 'loginPatBtn',
+  'deviceFlowBtn', 'deviceBox', 'deviceCode', 'deviceCountdown', 'deviceOpenBtn', 'deviceStatus', 'rateLimit',
+  'view-repos', 'view-repo', 'view-local', 'view-profile', 'view-settings', 'navRepos', 'navLocal', 'navProfile', 'navSettings', 'globalSearch',
   'repoCount', 'refreshRepos', 'refreshReposForce', 'repoSearch', 'repoFilter', 'repoSort',
   'autoUpdateToggle', 'autoUpdateInterval', 'autoUpdateState', 'manualRefresh', 'updateBadge', 'repoList',
   'backToRepos', 'detailName', 'detailDesc', 'detailBadges', 'detailStars', 'detailForks', 'detailIssues',
@@ -181,6 +187,36 @@ const DASHBOARD_IDS = [
   'fileViewerWrap', 'fileViewerName', 'fileViewerMeta', 'fileViewer',
   'reloadCommits', 'commitList', 'reloadBranches', 'branchList', 'reloadIssues', 'issueList',
   'reloadPulls', 'pullList',
+  // v3.0: login wizard + diagnostics
+  'diagBtn', 'diagStatus', 'diagList', 'oauthConfigDetails',
+  // v3.0: notifications
+  'notifBtn', 'notifBadge', 'notifPanel', 'notifList', 'notifMarkReadBtn', 'notifCloseBtn',
+  // v3.0: create repo + repo actions
+  'createRepoName', 'createRepoDesc', 'createRepoPrivate', 'createRepoBtn',
+  'repoZipBtn', 'repoStarBtn', 'repoUnstarBtn', 'repoForkBtn', 'repoEditDescBtn', 'repoDeleteBtn',
+  // v3.0: code search + file edit/create/delete/upload
+  'codeSearchInput', 'codeSearchBtn', 'codeSearchResults',
+  'fileEditWrap', 'fileEditArea', 'fileSaveBtn', 'fileDeleteBtn',
+  'newFileName', 'newFileContent', 'newFileBtn', 'fileUploadInput',
+  // v3.0: releases
+  'reloadReleases', 'releaseList', 'releaseTag', 'releaseName', 'releaseBody',
+  'releaseDraft', 'releasePrerelease', 'createReleaseBtn', 'tab-releases',
+  // v3.0: issues detail + create
+  'issueTitle', 'issueBody', 'issueLabels', 'createIssueBtn',
+  'issueDetail', 'issueDetailTitle', 'issueDetailMeta', 'issueDetailBody',
+  'issueComments', 'commentBody', 'addCommentBtn', 'issueCloseBtn', 'issueDetailBackBtn',
+  // v3.0: pull requests create
+  'prTitle', 'prHead', 'prBase', 'prBody', 'createPrBtn', 'prMergeMethod',
+  // v3.0: profile + settings views
+  'profileAvatar', 'profileName', 'profileLogin', 'profileEmail', 'profileBio',
+  'profileCompany', 'profileBlog', 'profileLocation', 'profileStats', 'profileLink', 'reloadProfile',
+  'settingsInterval', 'settingsDefaultBranch', 'settingsAutoSync', 'settingsNotifications',
+  'saveSettingsBtn', 'settingsStatus',
+  // v3.0: local git — cherry-pick / revert / reset, tags, local .zip
+  'localZipBtn', 'cpSha', 'cherryPickBtn', 'revertBtn', 'resetMode', 'resetRef',
+  'resetHardConfirm', 'resetBtn',
+  'tagList', 'newTagName', 'newTagMessage', 'newTagRef', 'createTagBtn',
+  'deleteTagName', 'deleteTagBtn', 'pushTagName', 'pushTagBtn', 'refreshTagsBtn',
 ];
 
 function runScript(file, ids, store) {
@@ -303,8 +339,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     /* --- 5. popup.js --- */
     console.log('\n[popup.js]');
     const pop = runScript('popup.js', [
-      'lamp', 'connection', 'repoName', 'branchName', 'repoPath', 'message',
-      'version', 'token', 'refresh', 'saveToken', 'open',
+      'lamp', 'connection', 'bridgeDetail', 'repoName', 'branchName', 'repoPath', 'message',
+      'version', 'token', 'refresh', 'saveToken', 'open', 'downloadZipBtn',
+      'githubBox', 'githubSignedOut', 'githubSignedIn', 'ghAvatar', 'ghLogin', 'ghEmail',
+      'ghAuthMethod', 'ghName', 'logout', 'aheadBehindBadge', 'autoUpdateToggle',
+      'autoUpdateState', 'reconnect',
     ], { bridgeUrl: BASE, token: TOKEN });
     await sleep(1200);
     const p = pop.document;
@@ -313,10 +352,93 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
     check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
       p.getElementById('message').textContent);
-    check('popup version from manifest', p.getElementById('version').textContent === 'v2.0.0',
+    check('popup version from manifest', p.getElementById('version').textContent === 'v3.0.0',
       p.getElementById('version').textContent);
     check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
       p.getElementById('repoName').textContent);
+    check('popup zip button enabled when a repo is connected (section 2 connected one)',
+      p.getElementById('downloadZipBtn').disabled === false,
+      'disabled=' + p.getElementById('downloadZipBtn').disabled);
+    check('popup downloadLocalZip helper exists',
+      vm.runInContext('typeof downloadLocalZip', pop.sandbox) === 'function');
+
+    /* --- 6. dashboard v3.0 --- */
+    console.log('\n[dashboard v3.0]');
+    const dashEval = (expr) => vm.runInContext(expr, dash.sandbox);
+
+    // 6a. looksLikeGithubToken: real tokens pass, email/password do not.
+    check('looksLikeGithubToken accepts ghp_ classic token',
+      dashEval(`looksLikeGithubToken('ghp_${'A'.repeat(36)}')`) === true);
+    check('looksLikeGithubToken accepts github_pat_ fine-grained token',
+      dashEval(`looksLikeGithubToken('github_pat_${'A'.repeat(40)}')`) === true);
+    check('looksLikeGithubToken accepts gho_/ghu_/ghs_/ghr_ prefixes',
+      dashEval(`looksLikeGithubToken('gho_${'A'.repeat(36)}')`) === true &&
+      dashEval(`looksLikeGithubToken('ghu_${'A'.repeat(36)}')`) === true &&
+      dashEval(`looksLikeGithubToken('ghs_${'A'.repeat(36)}')`) === true &&
+      dashEval(`looksLikeGithubToken('ghr_${'A'.repeat(36)}')`) === true);
+    check('looksLikeGithubToken rejects an email address',
+      dashEval(`looksLikeGithubToken('nguyenvu16592b@gmail.com')`) === false);
+    check('looksLikeGithubToken rejects a plain password',
+      dashEval(`looksLikeGithubToken('MySecretPassword123')`) === false);
+    check('looksLikeGithubToken rejects a too-short token',
+      dashEval(`looksLikeGithubToken('ghp_abc')`) === false);
+    check('looksLikeGithubToken rejects empty input',
+      dashEval(`looksLikeGithubToken('')`) === false);
+
+    // 6b. Pasting an email into the PAT box warns and never sends a request.
+    d.getElementById('patInput').value = 'nguyenvu16592b@gmail.com';
+    await dashEval('loginWithPat()').catch(() => {});
+    check('email pasted as PAT shows the red format warning',
+      d.getElementById('patWarning').textContent.includes('không phải token'),
+      d.getElementById('patWarning').textContent.slice(0, 80));
+    check('email pasted as PAT leaves the warning visible',
+      !d.getElementById('patWarning').classList.contains('hidden'));
+
+    // 6c. Login diagnostics renders instead of crashing. The v2.1 bridge
+    // has no /login/diagnostics route, so this is a SOFT SKIP: the panel
+    // must explain the gap (naming bridge v3.0) rather than fail.
+    await dashEval('loadLoginDiagnostics()').catch(() => {});
+    const diagText = d.getElementById('diagStatus').textContent;
+    check('diagnostics panel renders a status line', diagText.length > 0, diagText);
+    check('diagnostics 404 path names the bridge version gap',
+      !diagText.includes('Không kiểm tra được') || diagText.includes('v3.0'), diagText);
+
+    // 6d. v3.0 helpers + feature functions exist.
+    for (const fn of [
+      'downloadBlob', 'downloadRepoZip', 'downloadCurrentRepoZip', 'createRepo',
+      'starRepo', 'unstarRepo', 'forkRepo', 'editRepoDescription', 'deleteRepo',
+      'loadReleases', 'createRelease', 'searchCode', 'saveEditedFile',
+      'createNewFile', 'deleteCurrentFile', 'uploadFileToRepo',
+      'createIssue', 'showIssueDetail', 'addIssueComment', 'toggleIssueState',
+      'createPullRequest', 'mergePullRequest', 'closePullRequest',
+      'loadNotifications', 'markAllNotificationsRead', 'loadProfile',
+      'applySettingsToUI', 'saveSettings',
+      'cherryPickCommit', 'revertCommit', 'resetBranch',
+      'loadTags', 'createTag', 'deleteTag', 'pushTag', 'exportLocalZip',
+    ]) {
+      check(`v3.0 function ${fn} exists`, dashEval(`typeof ${fn}`) === 'function');
+    }
+
+    // 6e. New views switch correctly.
+    dashEval(`showView('profile')`);
+    check('profile view shows, repos view hides',
+      d.getElementById('view-profile').classList.contains('hidden') === false &&
+      d.getElementById('view-repos').classList.contains('hidden') === true);
+    dashEval(`showView('settings')`);
+    check('settings view shows, profile view hides',
+      d.getElementById('view-settings').classList.contains('hidden') === false &&
+      d.getElementById('view-profile').classList.contains('hidden') === true);
+    dashEval(`showView('repos')`);
+    check('repos view restores after profile/settings',
+      d.getElementById('view-repos').classList.contains('hidden') === false);
+
+    // 6f. Settings save persists to storage (no bridge route needed).
+    d.getElementById('settingsDefaultBranch').value = 'main';
+    d.getElementById('settingsNotifications').checked = true;
+    await dashEval('saveSettings()').catch(() => {});
+    check('settings default branch persisted to storage', store.settingsDefaultBranch === 'main',
+      'stored=' + store.settingsDefaultBranch);
+    check('settings notifications persisted to storage', store.settingsNotifications === true);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

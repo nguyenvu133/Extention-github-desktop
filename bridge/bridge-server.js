@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v2.1.0
+ * v3.0.0
  *
  * A dependency-free local bridge (Node >= 18, only built-in modules) that
  * exposes two things to the companion Chrome extension:
@@ -23,6 +23,14 @@
  *      so unchanged polls cost no rate limit), pushes change events to
  *      the extension over Server-Sent Events, and (v2.1, opt-in) can
  *      auto-sync (pull) the local repo when its remote gains commits.
+ *   3. GITHUB API v3.0 - login diagnostics (Vietnamese) + PAT format
+ *      guard (passwords are never accepted), repo .zip download via
+ *      codeload + local `git archive` zip, repo create/edit/delete,
+ *      fork, star, issues (+comments), pull requests (+merge),
+ *      releases (+asset download), binary file upload (contentBase64),
+ *      file delete, code search, notifications, full profile; local
+ *      git adds cherry-pick, revert, reset (hard needs confirm) and
+ *      tags (create/list/delete/push).
  *
  * Design rules (kept from v1, extended):
  *  - Binds to 127.0.0.1 only; never exposed to the network.
@@ -41,9 +49,9 @@
  *    user profile (login, name, avatar_url) + the sign-in method.
  *  - Git is always spawned with shell:false (no shell injection).
  *  - Paths are validated as repository-relative (no absolute, no traversal).
- *  - No reset / plain --force / arbitrary shell endpoint. The only
- *    forceful operation is `git push --force-with-lease`, and only when
- *    the caller passes confirm=true explicitly.
+ *  - No plain --force / arbitrary shell endpoint. The only forceful
+ *    operations are `git push --force-with-lease` and `git reset
+ *    --hard`, each only when the caller passes confirm=true explicitly.
  *  - GitHub requests use the global fetch (Node >= 18) with a timeout and
  *    honour ETag/If-None-Match so auto-update polling is cheap.
  *
@@ -55,6 +63,7 @@
  *                         (default: the bridge/ folder itself)
  *  - GITHUB_API_BASE      (default https://api.github.com)
  *  - GITHUB_OAUTH_BASE    (default https://github.com)
+ *  - GITHUB_CODELOAD_BASE (default https://codeload.github.com)
  *  - GITHUB_OAUTH_CLIENT_ID / GITHUB_CLIENT_ID
  *                         OAuth App client id, enables Device Flow and
  *                         the OAuth Web Flow. Without it, both flows
@@ -70,8 +79,9 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { Readable } = require('stream');
 
-const VERSION = '2.1.0';
+const VERSION = '3.0.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -82,6 +92,7 @@ const GH_CONFIG_FILE = path.join(DATA_DIR, '.github-config.json');
 const GH_OAUTH_FILE = path.join(DATA_DIR, '.github-oauth.json');
 const GITHUB_API_BASE = (process.env.GITHUB_API_BASE || 'https://api.github.com').replace(/\/+$/, '');
 const GITHUB_OAUTH_BASE = (process.env.GITHUB_OAUTH_BASE || 'https://github.com').replace(/\/+$/, '');
+const GITHUB_CODELOAD_BASE = (process.env.GITHUB_CODELOAD_BASE || 'https://codeload.github.com').replace(/\/+$/, '');
 const GITHUB_CLIENT_ID = String(process.env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || '').trim();
 const GITHUB_CLIENT_SECRET = String(process.env.GITHUB_OAUTH_CLIENT_SECRET || '').trim();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // a login attempt lives 10 minutes
@@ -244,6 +255,7 @@ function publicUser() {
     login: u.login || null,
     id: u.id || null,
     name: u.name || null,
+    email: u.email || null,
     avatar_url: u.avatar_url || null,
     html_url: u.html_url || null,
     type: u.type || null,
@@ -353,7 +365,7 @@ function send(req, res, status, data) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Vary'] = 'Origin';
     headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
-    headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS';
+    headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
     headers['Access-Control-Max-Age'] = '600';
   }
   if (status === 204) {
@@ -437,11 +449,22 @@ const ghCache = new Map(); // url -> { etag, data, at }
 let lastRateLimit = { limit: null, remaining: null, reset: null, used: null };
 
 class GhError extends Error {
-  constructor(status, message, body) {
+  constructor(status, message, body, code) {
     super(message);
     this.status = status;
     this.body = body || null;
+    this.code = code || null;
   }
+}
+
+// fail(code, message): an Error carrying a machine-readable `code` so the
+// UI can tell "wrong input shape" apart from a generic failure. The
+// server's catch-all at the bottom of this file copies `code` into the
+// JSON error response.
+function fail(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 function ghHeaders(token) {
@@ -456,10 +479,17 @@ function ghHeaders(token) {
 function noteRateLimit(headers) {
   if (!headers) return;
   const get = (name) => (typeof headers.get === 'function' ? headers.get(name) : headers[name]);
-  const limit = Number(get('x-ratelimit-limit'));
-  const remaining = Number(get('x-ratelimit-remaining'));
-  const reset = Number(get('x-ratelimit-reset'));
-  const used = Number(get('x-ratelimit-used'));
+  // A missing header is null, and Number(null) is 0 — without this guard
+  // every header-less response would fake "0 requests remaining".
+  const num = (name) => {
+    const v = get(name);
+    if (v === null || v === undefined || v === '') return NaN;
+    return Number(v);
+  };
+  const limit = num('x-ratelimit-limit');
+  const remaining = num('x-ratelimit-remaining');
+  const reset = num('x-ratelimit-reset');
+  const used = num('x-ratelimit-used');
   if (Number.isFinite(limit)) lastRateLimit.limit = limit;
   if (Number.isFinite(remaining)) lastRateLimit.remaining = remaining;
   if (Number.isFinite(reset)) lastRateLimit.reset = reset;
@@ -647,6 +677,56 @@ function normalizeIssue(i) {
     comments: i.comments || 0,
     labels: Array.isArray(i.labels) ? i.labels.map((l) => (typeof l === 'string' ? l : l.name)) : [],
     is_pull_request: !!i.pull_request,
+  };
+}
+
+function normalizePull(p) {
+  if (!p) return null;
+  return {
+    number: p.number,
+    title: p.title || '',
+    state: p.state || '',
+    html_url: p.html_url || '',
+    user: (p.user && p.user.login) || '',
+    created_at: p.created_at || null,
+    updated_at: p.updated_at || null,
+    head: (p.head && p.head.ref) || '',
+    base: (p.base && p.base.ref) || '',
+    draft: !!p.draft,
+    merged_at: p.merged_at || null,
+    merged: !!p.merged,
+  };
+}
+
+function normalizeComment(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    user: (c.user && c.user.login) || '',
+    body: c.body || '',
+    created_at: c.created_at || null,
+    html_url: c.html_url || '',
+  };
+}
+
+function normalizeRelease(rel) {
+  if (!rel) return null;
+  return {
+    id: rel.id,
+    tag_name: rel.tag_name || '',
+    name: rel.name || '',
+    body: rel.body || '',
+    draft: !!rel.draft,
+    prerelease: !!rel.prerelease,
+    html_url: rel.html_url || '',
+    created_at: rel.created_at || null,
+    assets: Array.isArray(rel.assets) ? rel.assets.map((a) => ({
+      id: a.id,
+      name: a.name || '',
+      size: a.size || 0,
+      download_count: a.download_count || 0,
+      browser_download_url: a.browser_download_url || '',
+    })) : [],
   };
 }
 
@@ -920,6 +1000,59 @@ function runGit(args, options = {}) {
   return runGitIn(repoPath, args, options);
 }
 
+// Binary twin of runGitIn: collects stdout as a Buffer instead of a
+// string, so `git archive --format=zip` output survives intact.
+function runGitBufferIn(cwd, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (!cwd) return reject(new Error('No repository connected'));
+    let child;
+    try {
+      child = spawn('git', args, {
+        cwd,
+        windowsHide: true,
+        shell: false,
+        env: gitEnv(),
+      });
+    } catch (err) {
+      return reject(new Error(`Could not start git: ${err.message}`));
+    }
+    const chunks = [];
+    let errText = '';
+    let finished = false;
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      try { child.kill('SIGKILL'); } catch (_) {}
+      reject(new Error(`git ${args[0]} timed out after ${GIT_TIMEOUT_MS / 1000}s`));
+    }, options.timeout || GIT_TIMEOUT_MS);
+    child.stdout.on('data', (d) => { chunks.push(Buffer.from(d)); });
+    child.stderr.on('data', (d) => { errText += d.toString('utf8'); });
+    child.on('error', (e) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (e.code === 'ENOENT') {
+        return reject(new Error('Git is not installed or not on PATH. Install Git and restart the bridge.'));
+      }
+      reject(new Error(`Could not run git: ${e.message}`));
+    });
+    child.on('close', (code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (code === 0) return resolve(Buffer.concat(chunks));
+      const error = new Error((errText || '').trim() || `git exited with code ${code}`);
+      error.gitCode = code;
+      error.gitStderr = errText;
+      reject(error);
+    });
+  });
+}
+
+function runGitBuffer(args, options = {}) {
+  return runGitBufferIn(repoPath, args, options);
+}
+
 /* ------------------------------------------------------------------ */
 /* Shared push/pull helpers (v2.1) — used by the routes AND by         */
 /* auto-sync, so the behaviour is identical everywhere.                */
@@ -983,6 +1116,22 @@ function validateBranchName(name) {
     throw new Error(`Invalid branch name: ${value}`);
   }
   return value;
+}
+
+function validateSha(value) {
+  const sha = String(value || '').trim();
+  if (!/^[0-9a-f]{4,40}$/i.test(sha)) throw new Error('A commit SHA (4-40 hex characters) is required');
+  return sha;
+}
+
+// A ref for reset / archive / tag: a SHA, HEAD / HEAD~n, or a branch/tag
+// name. Anything with whitespace or shell metacharacters is refused.
+function validateGitRef(ref) {
+  const value = String(ref || '').trim();
+  if (!value) throw new Error('A ref is required');
+  if (/^[0-9a-f]{4,40}$/i.test(value)) return value;
+  if (/^HEAD(~\d+)?$/.test(value)) return value;
+  return validateBranchName(value);
 }
 
 function validateRemoteName(name) {
@@ -1413,7 +1562,7 @@ async function handle(req, res) {
   }
 
   let body = {};
-  if (req.method === 'POST' || req.method === 'PUT') {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE') {
     body = await readBody(req);
   }
 
@@ -1422,6 +1571,19 @@ async function handle(req, res) {
   if (route === '/api/github/auth' && req.method === 'POST') {
     const token = String(body.token || '').trim();
     if (!token) throw new Error('Paste a Personal Access Token first');
+    // GitHub removed password auth for third-party apps in 2020: no app
+    // may ever accept a GitHub password. Users kept pasting their
+    // email/password into this field, so reject anything shaped like
+    // credentials (or like a random string) up front, with a clear
+    // Vietnamese explanation of what a token looks like instead.
+    if (token.includes('@') || /\s/.test(token)) {
+      throw fail('INVALID_TOKEN_FORMAT',
+        'Đây giống email/mật khẩu, không phải token. GitHub không cho app khác nhập mật khẩu — token bắt đầu bằng ghp_... (classic) hoặc github_pat_... (fine-grained). Tạo token tại github.com → Settings → Developer settings → Personal access tokens.');
+    }
+    if (!/^(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)/.test(token)) {
+      throw fail('INVALID_TOKEN_FORMAT',
+        'Token GitHub bắt đầu bằng ghp_... hoặc github_pat_... — thứ bạn dán vào không đúng dạng token.');
+    }
     if (token.length < 20) throw new Error('That does not look like a GitHub token (too short)');
     const { user, scopes } = await ghValidateToken(token);
     signInWithToken(token, user, scopes, 'pat');
@@ -1553,9 +1715,8 @@ async function handle(req, res) {
   if (route === '/api/github/oauth/start' && req.method === 'GET') {
     const clientId = oauthClientId();
     if (!clientId) {
-      throw new Error(
-        'OAuth Web Flow is not configured. Create a GitHub OAuth App and save its Client ID + Client Secret in the dashboard first, or sign in with a Personal Access Token / Device Flow instead.'
-      );
+      throw fail('OAUTH_APP_NOT_CONFIGURED',
+        'Bridge chưa cấu hình OAuth App. Tạo OAuth App rồi lưu Client ID + Client Secret trong dashboard (mục Đăng nhập GitHub), hoặc dùng Device Flow / token PAT.');
     }
     const state = mintOAuthState();
     const authorizeUrl = `${GITHUB_OAUTH_BASE}/login/oauth/authorize?` + new URLSearchParams({
@@ -1570,6 +1731,80 @@ async function handle(req, res) {
       authorizeUrl,
       expiresIn: Math.floor(OAUTH_STATE_TTL_MS / 1000),
       callbackUrl: oauthCallbackUrl(),
+    });
+  }
+
+  // v3.0: login diagnostics (Vietnamese). One call answers "why can't I
+  // sign in?" — OAuth App configured? token present + still valid?
+  // repo scope? rate limit left? github.com reachable?
+  if (route === '/api/github/login/diagnostics' && req.method === 'GET') {
+    const checks = [];
+    const push = (key, label, ok, detail, fix) => checks.push({ key, label, ok, detail, fix: fix || null });
+
+    push('bridge', 'Bridge đang chạy', true, 'Bridge đang chạy trên máy này.');
+
+    const cid = oauthClientId();
+    const csec = oauthClientSecret();
+    if (cid && csec && cid.length >= 5) {
+      push('oauth-app', 'OAuth App đã cấu hình', true, 'Client ID + Client Secret đã lưu trên bridge.');
+    } else if (cid && !csec) {
+      push('oauth-app', 'OAuth App đã cấu hình', false, 'Đã có Client ID nhưng thiếu Client Secret.', 'Lưu Client Secret trong dashboard (mục Đăng nhập GitHub).');
+    } else {
+      push('oauth-app', 'OAuth App đã cấu hình', false, 'Chưa cấu hình OAuth App (thiếu Client ID).', 'Tạo OAuth App trên github.com rồi lưu Client ID + Client Secret trong dashboard (mục Đăng nhập GitHub), hoặc dùng Device Flow / token PAT.');
+    }
+
+    let validatedScopes = null;
+    if (!ghConfig.token) {
+      push('token', 'Token GitHub', false, 'Chưa đăng nhập GitHub.', 'Đăng nhập bằng PAT, Device Flow hoặc Connect GitHub.');
+    } else {
+      try {
+        const validated = await ghValidateToken(ghConfig.token);
+        validatedScopes = validated.scopes;
+        push('token', 'Token GitHub', true, `Token còn hiệu lực — đăng nhập với ${(validated.user && validated.user.login) || 'tài khoản GitHub'}.`);
+      } catch (err) {
+        const is401 = err.status === 401 || /401/.test(err.message || '');
+        push('token', 'Token GitHub', false,
+          is401 ? 'Token đã hết hạn hoặc bị thu hồi (401).' : `Không kiểm tra được token: ${err.message}`,
+          'Đăng nhập lại bằng PAT, Device Flow hoặc Connect GitHub.');
+      }
+    }
+
+    if (validatedScopes !== null) {
+      const hasRepo = validatedScopes.split(',').map((s) => s.trim()).includes('repo');
+      push('scopes', 'Quyền repo', hasRepo,
+        hasRepo ? 'Token có quyền repo.' : 'Token thiếu quyền repo.',
+        hasRepo ? null : 'Đăng nhập lại với token có quyền repo (scope repo).');
+    } else {
+      push('scopes', 'Quyền repo', false,
+        'Chưa xác định được scope vì token chưa hợp lệ hoặc chưa đăng nhập.',
+        'Đăng nhập lại với token có quyền repo (scope repo).');
+    }
+
+    const remaining = lastRateLimit.remaining;
+    push('rate-limit', 'Rate limit GitHub', remaining === null || remaining > 5,
+      remaining === null ? 'Chưa có dữ liệu rate limit.' : `Còn ${remaining} request.`,
+      remaining !== null && remaining <= 5 ? 'Chờ rate limit hồi lại rồi thử lại.' : null);
+
+    try {
+      const reach = await fetch(`${GITHUB_OAUTH_BASE}/`, { signal: AbortSignal.timeout(5000) });
+      push('reachability', 'Kết nối tới github.com', reach.status < 500,
+        `github.com trả về HTTP ${reach.status}.`,
+        reach.status < 500 ? null : 'github.com đang lỗi — thử lại sau.');
+    } catch (err) {
+      push('reachability', 'Kết nối tới github.com', false,
+        `Không tới được github.com: ${err.message}`,
+        'Kiểm tra mạng / VPN / tường lửa, rồi thử lại.');
+    }
+
+    const failed = checks.filter((c) => !c.ok);
+    return send(req, res, 200, {
+      ok: failed.length === 0,
+      authed: ghAuthed(),
+      login: ghConfig.user ? ghConfig.user.login : null,
+      checks,
+      summary: failed.length === 0
+        ? 'Mọi kiểm tra đều ổn — đăng nhập GitHub đang hoạt động.'
+        : `Có ${failed.length} vấn đề cần xử lý: ${failed.map((f) => f.label).join('; ')}.`,
     });
   }
 
@@ -1614,6 +1849,20 @@ async function handle(req, res) {
     });
   }
 
+  if (route === '/api/github/repos' && req.method === 'POST') {
+    requireGhAuth();
+    const name = String(body.name || '').trim();
+    if (!name) throw new Error('Repository name is required');
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error('Invalid repository name — use letters, digits, ., _ or -');
+    const payload = { name };
+    if (body.description !== undefined) payload.description = String(body.description);
+    if (body.private !== undefined) payload.private = !!body.private;
+    if (body.auto_init !== undefined) payload.auto_init = !!body.auto_init;
+    const gh = await ghRequest('/user/repos', { method: 'POST', body: payload });
+    repoListCache = { at: 0, repos: [] };
+    return send(req, res, 200, { ok: true, repo: normalizeRepo(gh.data) });
+  }
+
   if (route === '/api/github/repos/all' && req.method === 'GET') {
     requireGhAuth();
     const force = url.searchParams.get('force') === '1';
@@ -1631,9 +1880,110 @@ async function handle(req, res) {
     return send(req, res, 200, { ok: true, repos, total_count: (gh.data && gh.data.total_count) || repos.length, incomplete_results: !!(gh.data && gh.data.incomplete_results) });
   }
 
+  // v3.0: download a repo as a .zip (codeload). This MUST live BEFORE
+  // the repoMatch block below, or 'zip' would be swallowed as `rest`
+  // and answered 404.
+  const zipMatch = route.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)\/zip$/);
+  if (zipMatch && req.method === 'GET') {
+    requireGhAuth();
+    const owner = safeGhPath(decodeURIComponent(zipMatch[1]));
+    const repo = safeGhPath(decodeURIComponent(zipMatch[2]));
+    let ref = String(url.searchParams.get('ref') || '').trim();
+    if (!ref) {
+      const repoRes = await ghRequest(`/repos/${owner}/${repo}`, { useCache: true });
+      ref = (repoRes.data && repoRes.data.default_branch) || 'main';
+    }
+    const isSha = /^[0-9a-f]{40}$/i.test(ref);
+    const zipPath = isSha
+      ? `/zip/${ref}`
+      : `/zip/refs/heads/${ref.split('/').map((seg) => encodeURIComponent(seg)).join('/')}`;
+    const zipUrl = `${GITHUB_CODELOAD_BASE}/${owner}/${repo}${zipPath}`;
+    let zipRes;
+    try {
+      zipRes = await fetch(zipUrl, {
+        headers: { Accept: 'application/octet-stream', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}`, Authorization: `Bearer ${ghConfig.token}` },
+        signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      throw new GhError(502, `Could not reach GitHub: ${err.message}`);
+    }
+    if (!zipRes.ok) {
+      if (zipRes.status === 404) throw new GhError(404, 'Không tìm thấy repo hoặc branch');
+      if (zipRes.status === 403) throw new GhError(403, 'GitHub từ chối tải zip (403) — có thể đã hết rate limit hoặc repo không cho phép.');
+      throw new GhError(zipRes.status, `GitHub API error ${zipRes.status}`);
+    }
+    const safeRef = ref.replace(/[^A-Za-z0-9._-]+/g, '-');
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${decodeURIComponent(zipMatch[2])}-${safeRef}.zip"`,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    await new Promise((resolve, reject) => {
+      Readable.fromWeb(zipRes.body).on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
+    });
+    return;
+  }
+
+  if (route === '/api/github/search/code' && req.method === 'GET') {
+    requireGhAuth();
+    const q = String(url.searchParams.get('q') || '').trim();
+    if (!q) throw new Error('Search query (q) is required');
+    const repoFilter = String(url.searchParams.get('repo') || '').trim();
+    const fullQ = repoFilter ? `${q} repo:${repoFilter}` : q;
+    const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+    const gh = await ghRequest(`/search/code?q=${encodeURIComponent(fullQ)}&per_page=${perPage}`, { useCache: false });
+    const items = (Array.isArray(gh.data && gh.data.items) ? gh.data.items : []).map((it) => ({
+      name: it.name || '',
+      path: it.path || '',
+      repository: (it.repository && it.repository.full_name) || '',
+      html_url: it.html_url || '',
+      sha: it.sha || '',
+    }));
+    return send(req, res, 200, { ok: true, items, total_count: (gh.data && gh.data.total_count) || items.length });
+  }
+
+  if (route === '/api/github/notifications' && req.method === 'GET') {
+    requireGhAuth();
+    const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+    const gh = await ghRequest(`/notifications?per_page=${perPage}`, { useCache: false });
+    const notifications = (Array.isArray(gh.data) ? gh.data : []).map((n) => ({
+      id: n.id,
+      subject: { title: (n.subject && n.subject.title) || '', type: (n.subject && n.subject.type) || '', url: (n.subject && n.subject.url) || '' },
+      repository: (n.repository && n.repository.full_name) || '',
+      reason: n.reason || '',
+      unread: !!n.unread,
+      updated_at: n.updated_at || null,
+    }));
+    return send(req, res, 200, { ok: true, notifications });
+  }
+
+  if (route === '/api/github/notifications/read' && req.method === 'POST') {
+    requireGhAuth();
+    await ghRequest('/notifications', { method: 'PUT' });
+    return send(req, res, 200, { ok: true });
+  }
+
+  if (route === '/api/github/profile' && req.method === 'GET') {
+    requireGhAuth();
+    const gh = await ghRequest('/user', { useCache: false });
+    const u = gh.data || {};
+    return send(req, res, 200, {
+      ok: true,
+      profile: {
+        login: u.login || null, id: u.id || null, name: u.name || null, email: u.email || null,
+        bio: u.bio || null, company: u.company || null, blog: u.blog || null, location: u.location || null,
+        public_repos: typeof u.public_repos === 'number' ? u.public_repos : null,
+        followers: typeof u.followers === 'number' ? u.followers : null,
+        following: typeof u.following === 'number' ? u.following : null,
+        created_at: u.created_at || null, avatar_url: u.avatar_url || null, html_url: u.html_url || null, type: u.type || null,
+      },
+    });
+  }
+
   // /api/github/repos/:owner/:repo and everything below it.
   const repoMatch = route.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
-  if (repoMatch && (req.method === 'GET' || req.method === 'PUT')) {
+  if (repoMatch && (req.method === 'GET' || req.method === 'PUT' || req.method === 'POST' || req.method === 'DELETE' || req.method === 'PATCH')) {
     requireGhAuth();
     const owner = safeGhPath(decodeURIComponent(repoMatch[1]));
     const repo = safeGhPath(decodeURIComponent(repoMatch[2]));
@@ -1724,10 +2074,17 @@ async function handle(req, res) {
       if (!relPath) throw new Error('File path (body.path) is required');
       const message = String(body.message || '').trim();
       if (!message) throw new Error('Commit message is required');
-      const content = String(body.content == null ? '' : body.content);
+      // v3.0: contentBase64 uploads a file as-is (binary safe); without
+      // it, body.content is treated as utf8 text, as before.
+      let encoded;
+      if (body.contentBase64) {
+        encoded = Buffer.from(String(body.contentBase64).replace(/\s/g, ''), 'base64').toString('base64');
+      } else {
+        encoded = Buffer.from(String(body.content == null ? '' : body.content), 'utf8').toString('base64');
+      }
       const payload = {
         message,
-        content: Buffer.from(content, 'utf8').toString('base64'),
+        content: encoded,
       };
       if (body.sha) payload.sha = String(body.sha);
       if (body.branch) payload.branch = String(body.branch);
@@ -1738,6 +2095,178 @@ async function handle(req, res) {
         ok: true,
         commit: d.commit ? { sha: d.commit.sha, message: (d.commit.message || '').split('\n')[0], html_url: d.commit.html_url || '' } : null,
         content: d.content ? { name: d.content.name, path: d.content.path, sha: d.content.sha } : null,
+      });
+    }
+
+    if (rest === '' && req.method === 'PATCH') {
+      const payload = {};
+      if (body.description !== undefined) payload.description = String(body.description);
+      if (body.private !== undefined) payload.private = !!body.private;
+      if (body.name !== undefined) {
+        const newName = String(body.name).trim();
+        if (!/^[A-Za-z0-9._-]+$/.test(newName)) throw new Error('Invalid repository name');
+        payload.name = newName;
+      }
+      const gh = await ghRequest(`/repos/${owner}/${repo}`, { method: 'PATCH', body: payload });
+      repoListCache = { at: 0, repos: [] };
+      return send(req, res, 200, { ok: true, repo: normalizeRepo(gh.data) });
+    }
+
+    if (rest === '' && req.method === 'DELETE') {
+      if (body.confirm !== true) throw new Error('Xóa repo cần xác nhận — gửi { confirm: true }.');
+      await ghRequest(`/repos/${owner}/${repo}`, { method: 'DELETE' });
+      repoListCache = { at: 0, repos: [] };
+      return send(req, res, 200, { ok: true });
+    }
+
+    if (rest === 'fork' && req.method === 'POST') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/forks`, { method: 'POST', body: {} });
+      return send(req, res, 200, { ok: true, repo: normalizeRepo(gh.data) });
+    }
+
+    if (rest === 'star' && req.method === 'PUT') {
+      await ghRequest(`/user/starred/${owner}/${repo}`, { method: 'PUT' });
+      return send(req, res, 200, { ok: true, starred: true });
+    }
+
+    if (rest === 'star' && req.method === 'DELETE') {
+      await ghRequest(`/user/starred/${owner}/${repo}`, { method: 'DELETE' });
+      return send(req, res, 200, { ok: true, starred: false });
+    }
+
+    if (rest === 'issues' && req.method === 'POST') {
+      const title = String(body.title || '').trim();
+      if (!title) throw new Error('Issue title is required');
+      const payload = { title };
+      if (body.body !== undefined) payload.body = String(body.body);
+      if (Array.isArray(body.labels)) payload.labels = body.labels.map(String);
+      const gh = await ghRequest(`/repos/${owner}/${repo}/issues`, { method: 'POST', body: payload });
+      return send(req, res, 200, { ok: true, issue: normalizeIssue(gh.data) });
+    }
+
+    const issueMatch = rest.match(/^issues\/(\d+)$/);
+    if (issueMatch && req.method === 'GET') {
+      const number = issueMatch[1];
+      const gh = await ghRequest(`/repos/${owner}/${repo}/issues/${number}`, { useCache: false });
+      const commentsRes = await ghRequest(`/repos/${owner}/${repo}/issues/${number}/comments`, { useCache: false });
+      const comments = (Array.isArray(commentsRes.data) ? commentsRes.data : []).map(normalizeComment);
+      return send(req, res, 200, { ok: true, issue: normalizeIssue(gh.data), comments });
+    }
+
+    if (issueMatch && req.method === 'PATCH') {
+      const state = String(body.state || '').trim();
+      if (state !== 'open' && state !== 'closed') throw new Error("Issue state must be 'open' or 'closed'");
+      const gh = await ghRequest(`/repos/${owner}/${repo}/issues/${issueMatch[1]}`, { method: 'PATCH', body: { state } });
+      return send(req, res, 200, { ok: true, issue: normalizeIssue(gh.data) });
+    }
+
+    const issueCommentsMatch = rest.match(/^issues\/(\d+)\/comments$/);
+    if (issueCommentsMatch && req.method === 'POST') {
+      const commentBody = String(body.body || '').trim();
+      if (!commentBody) throw new Error('Comment body is required');
+      const gh = await ghRequest(`/repos/${owner}/${repo}/issues/${issueCommentsMatch[1]}/comments`, { method: 'POST', body: { body: commentBody } });
+      return send(req, res, 200, { ok: true, comment: normalizeComment(gh.data) });
+    }
+
+    if (rest === 'pulls' && req.method === 'POST') {
+      const title = String(body.title || '').trim();
+      if (!title) throw new Error('Pull request title is required');
+      const head = String(body.head || '').trim();
+      if (!head) throw new Error('Pull request head branch is required');
+      let base = String(body.base || '').trim();
+      if (!base) {
+        const repoRes = await ghRequest(`/repos/${owner}/${repo}`, { useCache: true });
+        base = (repoRes.data && repoRes.data.default_branch) || 'main';
+      }
+      const payload = { title, head, base };
+      if (body.body !== undefined) payload.body = String(body.body);
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls`, { method: 'POST', body: payload });
+      return send(req, res, 200, { ok: true, pull: normalizePull(gh.data) });
+    }
+
+    const pullMergeMatch = rest.match(/^pulls\/(\d+)\/merge$/);
+    if (pullMergeMatch && req.method === 'PUT') {
+      const payload = {};
+      if (body.merge_method !== undefined) {
+        if (!['merge', 'squash', 'rebase'].includes(body.merge_method)) throw new Error("merge_method must be 'merge', 'squash' or 'rebase'");
+        payload.merge_method = body.merge_method;
+      }
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullMergeMatch[1]}/merge`, { method: 'PUT', body: payload });
+      const d = gh.data || {};
+      return send(req, res, 200, { ok: true, merged: !!d.merged, message: d.message || '' });
+    }
+
+    const pullMatch = rest.match(/^pulls\/(\d+)$/);
+    if (pullMatch && req.method === 'PATCH') {
+      const state = String(body.state || '').trim();
+      if (state !== 'open' && state !== 'closed') throw new Error("Pull request state must be 'open' or 'closed'");
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullMatch[1]}`, { method: 'PATCH', body: { state } });
+      return send(req, res, 200, { ok: true, pull: normalizePull(gh.data) });
+    }
+
+    if (rest === 'releases' && req.method === 'GET') {
+      const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+      const gh = await ghRequest(`/repos/${owner}/${repo}/releases?per_page=${perPage}`, { useCache: false });
+      return send(req, res, 200, { ok: true, releases: (Array.isArray(gh.data) ? gh.data : []).map(normalizeRelease) });
+    }
+
+    if (rest === 'releases' && req.method === 'POST') {
+      const tagName = String(body.tag_name || '').trim();
+      if (!tagName) throw new Error('Release tag_name is required');
+      const payload = { tag_name: tagName };
+      if (body.name !== undefined) payload.name = String(body.name);
+      if (body.body !== undefined) payload.body = String(body.body);
+      if (body.draft !== undefined) payload.draft = !!body.draft;
+      if (body.prerelease !== undefined) payload.prerelease = !!body.prerelease;
+      const gh = await ghRequest(`/repos/${owner}/${repo}/releases`, { method: 'POST', body: payload });
+      return send(req, res, 200, { ok: true, release: normalizeRelease(gh.data) });
+    }
+
+    const releaseAssetMatch = rest.match(/^releases\/assets\/(\d+)$/);
+    if (releaseAssetMatch && req.method === 'GET') {
+      const assetId = releaseAssetMatch[1];
+      const fileName = String(url.searchParams.get('name') || `asset-${assetId}`).replace(/[^\w.\-() ]+/g, '_');
+      const assetUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/releases/assets/${assetId}`;
+      let assetRes;
+      try {
+        assetRes = await fetch(assetUrl, {
+          headers: { Accept: 'application/octet-stream', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}`, Authorization: `Bearer ${ghConfig.token}` },
+          signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+        });
+      } catch (err) {
+        throw new GhError(502, `Could not reach GitHub: ${err.message}`);
+      }
+      if (!assetRes.ok) {
+        if (assetRes.status === 404) throw new GhError(404, 'Không tìm thấy release asset');
+        throw new GhError(assetRes.status, `GitHub API error ${assetRes.status}`);
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${fileName}"`,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      await new Promise((resolve, reject) => {
+        Readable.fromWeb(assetRes.body).on('error', reject).pipe(res).on('finish', resolve).on('error', reject);
+      });
+      return;
+    }
+
+    if (rest === 'contents' && req.method === 'DELETE') {
+      const relPath = String(body.path || '').trim();
+      if (!relPath) throw new Error('File path (body.path) is required');
+      const message = String(body.message || '').trim();
+      if (!message) throw new Error('Commit message is required');
+      const sha = String(body.sha || '').trim();
+      if (!sha) throw new Error('File sha is required to delete a file');
+      const payload = { message, sha };
+      if (body.branch) payload.branch = String(body.branch);
+      const gh = await ghRequest(`/repos/${owner}/${repo}/contents/${safeGhPath(relPath)}`, { method: 'DELETE', body: payload });
+      const d = gh.data || {};
+      repoListCache = { at: 0, repos: [] };
+      return send(req, res, 200, {
+        ok: true,
+        commit: d.commit ? { sha: d.commit.sha, message: (d.commit.message || '').split('\n')[0], html_url: d.commit.html_url || '' } : null,
       });
     }
 
@@ -2241,6 +2770,99 @@ async function handle(req, res) {
     return send(req, res, 200, { path: rel, diff });
   }
 
+  /* ---- v3.0: cherry-pick / revert / reset / tags / archive-zip ---- */
+  if (route === '/api/git/archive-zip' && req.method === 'POST') {
+    const ref = String(body.ref || 'HEAD').trim();
+    validateGitRef(ref);
+    const repoName = path.basename(repoPath).replace(/[^A-Za-z0-9._-]+/g, '-');
+    const buf = await runGitBuffer(['archive', '--format=zip', ref]);
+    const safeRef = ref.replace(/[^A-Za-z0-9._-]+/g, '-');
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${repoName}-${safeRef}.zip"`,
+      'Content-Length': buf.length,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(buf);
+    return;
+  }
+
+  if (route === '/api/git/cherry-pick' && req.method === 'POST') {
+    const sha = validateSha(body.sha);
+    try {
+      const result = await runGit(['cherry-pick', sha]);
+      return send(req, res, 200, { ok: true, conflict: false, sha, result: (result || '').trim() });
+    } catch (err) {
+      const text = `${err.message || ''} ${err.gitStderr || ''}`;
+      if (/CONFLICT/i.test(text) || /Automatic cherry-pick failed/i.test(text)) {
+        return send(req, res, 200, { ok: false, conflict: true, conflicts: await conflictedFiles(), sha, result: text.trim() });
+      }
+      throw err;
+    }
+  }
+
+  if (route === '/api/git/revert' && req.method === 'POST') {
+    const sha = validateSha(body.sha);
+    try {
+      const result = await runGit(['revert', '--no-edit', sha]);
+      return send(req, res, 200, { ok: true, conflict: false, sha, result: (result || '').trim() });
+    } catch (err) {
+      const text = `${err.message || ''} ${err.gitStderr || ''}`;
+      if (/CONFLICT/i.test(text)) {
+        return send(req, res, 200, { ok: false, conflict: true, conflicts: await conflictedFiles(), sha, result: text.trim() });
+      }
+      throw err;
+    }
+  }
+
+  if (route === '/api/git/reset' && req.method === 'POST') {
+    const mode = String(body.mode || 'mixed').trim();
+    if (!['soft', 'mixed', 'hard'].includes(mode)) throw new Error("Reset mode must be 'soft', 'mixed' or 'hard'");
+    if (mode === 'hard' && body.confirm !== true) {
+      throw new Error('Reset --hard xóa thay đổi chưa commit — cần xác nhận (gửi { confirm: true }).');
+    }
+    const ref = validateGitRef(String(body.ref || 'HEAD').trim());
+    const result = await runGit(['reset', `--${mode}`, ref]);
+    return send(req, res, 200, { ok: true, mode, ref, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/tags' && req.method === 'GET') {
+    const raw = await runGit(['tag', '--list']);
+    const names = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+    const tags = [];
+    for (const name of names) {
+      let sha = null;
+      try { sha = (await runGit(['rev-list', '-n', '1', name])).trim() || null; } catch (_) { sha = null; }
+      tags.push({ name, sha });
+    }
+    return send(req, res, 200, { ok: true, tags });
+  }
+
+  if (route === '/api/git/tag/create' && req.method === 'POST') {
+    const name = validateBranchName(body.name);
+    const message = String(body.message || '').trim();
+    const ref = body.ref ? validateGitRef(String(body.ref).trim()) : null;
+    const args = ['tag'];
+    if (message) { args.push('-a', name, '-m', message); } else { args.push(name); }
+    if (ref) args.push(ref);
+    const result = await runGit(args);
+    return send(req, res, 200, { ok: true, tag: name, annotated: !!message, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/tag/delete' && req.method === 'POST') {
+    const name = validateBranchName(body.name);
+    const result = await runGit(['tag', '-d', name]);
+    return send(req, res, 200, { ok: true, tag: name, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/tag/push' && req.method === 'POST') {
+    const name = validateBranchName(body.name);
+    const remote = validateRemoteName(body.remote || 'origin');
+    const result = await runGit(['push', remote, name]);
+    return send(req, res, 200, { ok: true, tag: name, remote, result: (result || '').trim() });
+  }
+
   return send(req, res, 404, { error: `Unknown endpoint: ${req.method} ${route}` });
 }
 
@@ -2258,10 +2880,10 @@ scheduleAutoUpdate();
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
-    if (err instanceof GhError) {
-      return send(req, res, err.status || 400, { error: err.message });
-    }
-    send(req, res, 400, { error: (err && err.message) || 'Bridge error' });
+    const status = err instanceof GhError ? (err.status || 400) : 400;
+    const payload = { error: (err && err.message) || 'Bridge error' };
+    if (err && err.code) payload.code = err.code;
+    return send(req, res, status, payload);
   });
 });
 

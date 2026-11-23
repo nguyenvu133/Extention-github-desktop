@@ -1,18 +1,24 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v2.1.0
+ * PixiJS GitHub Desktop Sync — dashboard v3.0.0
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
- *     repo detail (README, file tree + viewer, commits, branches,
- *     issues, pull requests), auto-update with new-commit detection.
+ *     repo detail (README, file tree + viewer/editor, commits, branches,
+ *     issues, pull requests, releases), code search, notifications,
+ *     profile, create/fork/star/delete repos, download .zip.
  *   - Local Git tab: the v1 local-git client (status, stage, commit,
  *     branches, history, diff, fetch/pull/push) plus v2.1 push/pull/sync
  *     with ahead/behind, branch management, merge-conflict resolution,
- *     stash, remotes and clone.
- *   - Sign-in: OAuth Web Flow (Connect GitHub) first, then PAT and
- *     Device Flow as before.
+ *     stash, remotes and clone — and v3.0 cherry-pick / revert / reset,
+ *     tags, and local .zip export.
+ *   - Sign-in: a 3-step Vietnamese wizard — OAuth Web Flow (Connect
+ *     GitHub) first, Device Flow, then PAT. NO password field anywhere:
+ *     GitHub stopped accepting passwords for third-party apps in 2020,
+ *     so the extension never asks for one. A login-diagnostics panel
+ *     (GET /api/github/login/diagnostics) pinpoints the failing step
+ *     instead of a generic error.
  *
  * CONNECTION MODEL (this is what v1 got wrong — "Bridge disconnected"
  * used to stick forever):
@@ -28,7 +34,7 @@
  */
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, lastRepo: '' };
+const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, lastRepo: '', settingsDefaultBranch: '', settingsNotifications: true };
 
 let bridgeState = 'disconnected'; // 'connected' | 'reconnecting' | 'disconnected'
 let healthTimer = null;
@@ -43,12 +49,19 @@ let reposLoadedAt = null;
 let currentRepo = null; // { owner, repo, full_name, default_branch }
 let currentPath = ''; // path inside the file tree
 let selectedFile = '';
+let selectedFileSha = ''; // blob sha of the file open in the viewer (for edits)
 let localConnected = false;
 let updateBadgeCount = 0;
 let historyPage = 1; // v2.1 paginated local history
 let historyHasNext = false;
 let oauthConfigured = false; // v2.1 OAuth Web Flow ready?
 let oauthPollTimer = null;
+let deviceCountdownTimer = null; // v3.0 Device Flow countdown
+let deviceDeadline = 0;
+let currentIssueNumber = null; // issue open in the detail pane
+let notifUnreadCount = 0; // v3.0 notification badge
+let settingsDefaultBranch = ''; // v3.0 from storage
+let settingsNotifications = true; // v3.0 from storage
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -66,6 +79,8 @@ async function cfg() {
     autoUpdateEnabled: !!s.autoUpdateEnabled,
     autoUpdateInterval: Number(s.autoUpdateInterval) || 60,
     lastRepo: String(s.lastRepo || ''),
+    settingsDefaultBranch: String(s.settingsDefaultBranch || '').trim(),
+    settingsNotifications: s.settingsNotifications !== false,
   };
 }
 
@@ -96,6 +111,19 @@ function formatNumber(n) {
   return String(v);
 }
 
+// v3.0 — client-side PAT shape check, BEFORE anything is sent to the
+// bridge. GitHub tokens always start with one of these prefixes and are
+// at least 20 characters long. An email (contains @) or a plain password
+// never matches, so pasting one shows a clear warning instead of a
+// generic "invalid token" error from the API.
+function looksLikeGithubToken(value) {
+  const v = String(value || '').trim();
+  if (v.length < 20) return false;
+  return /^(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9_]+$/.test(v);
+}
+
+const TOKEN_FORMAT_HINT = 'Đây không phải token — token bắt đầu bằng ghp_… (classic) hoặc github_pat_… (fine-grained). GitHub không cho app khác nhập mật khẩu — mật khẩu chỉ nhập trên trang github.com.';
+
 /* ------------------------------------------------------------------ */
 /* Bridge API                                                          */
 /* ------------------------------------------------------------------ */
@@ -121,6 +149,39 @@ async function api(path, method = 'GET', body) {
 // GitHub calls all go through the bridge (the PAT never leaves it).
 async function gh(path, method = 'GET', body) {
   return api('/api/github' + path, method, body);
+}
+
+// v3.0 — download a binary response (repo .zip, release asset, local
+// archive) through the bridge with the bearer token, then trigger a
+// browser download. Throws a readable error when the bridge answers
+// with JSON instead of a file (e.g. 404 on an older bridge).
+async function downloadBlob(path, method = 'GET', body, filename) {
+  const c = await cfg();
+  if (!c.token) throw new Error('Missing bridge token. Start the bridge and paste its token.');
+  const res = await fetch(c.bridgeUrl + path, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.token },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = 'HTTP ' + res.status;
+    try {
+      const data = await res.json();
+      if (data && data.error) detail = data.error;
+    } catch (_) { /* non-JSON error body — keep the status */ }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'download.zip';
+    if (typeof a.click === 'function') a.click();
+  } finally {
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 1000);
+  }
+  return { filename: filename || 'download.zip', size: blob.size };
 }
 
 /* ------------------------------------------------------------------ */
@@ -313,6 +374,16 @@ function showUser(user) {
     $('userAvatar').src = user.avatar_url || '';
     $('userAvatar').alt = user.login;
     $('userLogin').textContent = user.login;
+    // v3.0: show the account email when the bridge reports it, so the
+    // user can recognise their own account at a glance.
+    const emailEl = $('userEmail');
+    if (user.email) {
+      emailEl.textContent = user.email;
+      emailEl.classList.remove('hidden');
+    } else {
+      emailEl.textContent = '';
+      emailEl.classList.add('hidden');
+    }
     const method = authMethodLabel(user.authMethod);
     $('userAuthMethod').textContent =
       (method ? 'via ' + method : '') + (user.scopes ? ' · ' + user.scopes : '');
@@ -321,6 +392,8 @@ function showUser(user) {
     $('userChip').classList.add('hidden');
     $('userAvatar').src = '';
     $('userLogin').textContent = '—';
+    $('userEmail').textContent = '';
+    $('userEmail').classList.add('hidden');
     $('userAuthMethod').textContent = '';
     $('loginPanel').classList.remove('hidden');
   }
@@ -373,7 +446,28 @@ let devicePollTimer = null;
 async function loginWithPat() {
   const token = $('patInput').value.trim();
   if (!token) throw new Error('Paste a Personal Access Token first');
-  const res = await gh('/auth', 'POST', { token });
+  // v3.0: check the shape on the client before sending anything. Users
+  // used to paste their GitHub email / password here — GitHub has not
+  // accepted passwords for third-party apps since 2020, so that can
+  // never work. Warn clearly and do NOT send the request.
+  if (!looksLikeGithubToken(token)) {
+    $('patWarning').textContent = TOKEN_FORMAT_HINT;
+    $('patWarning').classList.remove('hidden');
+    await loadLoginDiagnostics().catch(() => {});
+    throw new Error('The pasted text is not a GitHub token — see the warning above the button.');
+  }
+  $('patWarning').classList.add('hidden');
+  let res;
+  try {
+    res = await gh('/auth', 'POST', { token });
+  } catch (err) {
+    if (/INVALID_TOKEN_FORMAT/.test(err.message)) {
+      $('patWarning').textContent = TOKEN_FORMAT_HINT;
+      $('patWarning').classList.remove('hidden');
+    }
+    await loadLoginDiagnostics().catch(() => {});
+    throw err;
+  }
   $('patInput').value = '';
   showUser(res.user);
   log(`Signed in to GitHub as ${res.user.login}`);
@@ -381,11 +475,84 @@ async function loginWithPat() {
   await loadAutoUpdateStatus();
 }
 
+/* ------------------------------------------------------------------ */
+/* v3.0 — Login diagnostics: pinpoint the failing sign-in step         */
+/* ------------------------------------------------------------------ */
+
+// GET /api/github/login/diagnostics (bridge v3.0). Renders one line per
+// check: ✓/✗ + detail + how to fix it. Never throws: on an older bridge
+// (404) or when the bridge is down it says so in the panel instead of
+// failing — the UI must not break just because the route is missing.
+async function loadLoginDiagnostics() {
+  const list = $('diagList');
+  const statusEl = $('diagStatus');
+  list.innerHTML = '';
+  list.className = '';
+  statusEl.textContent = 'Đang kiểm tra…';
+  let data;
+  try {
+    data = await gh('/login/diagnostics');
+  } catch (err) {
+    statusEl.textContent = 'Không kiểm tra được: ' + err.message +
+      ' — bridge này có thể là bản cũ (cần bridge v3.0 cho chẩn đoán chi tiết). Kiểm tra lại: bridge có đang chạy không, token bridge có đúng không, rồi thử lại cách đăng nhập.';
+    return null;
+  }
+  const checks = (data && data.checks) || [];
+  if (!checks.length) {
+    statusEl.textContent = 'Bridge không trả về kết quả kiểm tra nào.';
+    return data;
+  }
+  const failed = checks.filter((c) => !c.ok);
+  statusEl.textContent = data.summary ||
+    (failed.length ? `${failed.length}/${checks.length} bước chưa đạt — xem cách sửa bên dưới.` : 'Tất cả các bước đều đạt ✓ — thử đăng nhập lại.');
+  for (const c of checks) {
+    const row = document.createElement('div');
+    row.className = 'diag-row' + (c.ok ? ' ok' : ' bad');
+    const mark = document.createElement('b');
+    mark.textContent = c.ok ? '✓' : '✗';
+    const body = document.createElement('span');
+    const label = document.createElement('b');
+    label.textContent = c.label || c.key || 'check';
+    body.append(label);
+    if (c.detail) body.append(document.createTextNode(' — ' + c.detail));
+    if (!c.ok && c.fix) {
+      const fix = document.createElement('small');
+      fix.textContent = 'Cách sửa: ' + c.fix;
+      body.append(fix);
+    }
+    row.append(mark, body);
+    list.append(row);
+  }
+  return data;
+}
+
+function stopDeviceCountdown() {
+  if (deviceCountdownTimer) { clearInterval(deviceCountdownTimer); deviceCountdownTimer = null; }
+}
+
+function updateDeviceCountdown() {
+  const left = Math.max(0, Math.floor((deviceDeadline - Date.now()) / 1000));
+  const mm = String(Math.floor(left / 60)).padStart(2, '0');
+  const ss = String(left % 60).padStart(2, '0');
+  $('deviceCountdown').textContent = left > 0 ? `Mã còn hiệu lực: ${mm}:${ss}` : 'Mã đã hết hạn.';
+}
+
 async function startDeviceFlow() {
-  const res = await gh('/auth/device/start', 'POST', {});
+  let res;
+  try {
+    res = await gh('/auth/device/start', 'POST', {});
+  } catch (err) {
+    await loadLoginDiagnostics().catch(() => {});
+    throw err;
+  }
   $('deviceBox').classList.remove('hidden');
   $('deviceCode').textContent = res.user_code || '—';
   $('deviceStatus').textContent = 'Waiting for you to approve on GitHub…';
+  // v3.0: show how long the code stays valid (countdown, 1s tick).
+  stopDeviceCountdown();
+  deviceDeadline = Date.now() + (Number(res.expires_in) || 900) * 1000;
+  updateDeviceCountdown();
+  deviceCountdownTimer = setInterval(updateDeviceCountdown, 1000);
   const verifyUrl = res.verification_uri_complete || res.verification_uri;
   $('deviceOpenBtn').onclick = () => {
     if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) chrome.tabs.create({ url: verifyUrl });
@@ -393,11 +560,12 @@ async function startDeviceFlow() {
   };
   if (devicePollTimer) clearInterval(devicePollTimer);
   const interval = Math.max(5, Number(res.interval) || 5) * 1000;
-  const deadline = Date.now() + (Number(res.expires_in) || 900) * 1000;
+  const deadline = deviceDeadline;
   devicePollTimer = setInterval(async () => {
     if (Date.now() > deadline) {
       clearInterval(devicePollTimer);
       devicePollTimer = null;
+      stopDeviceCountdown();
       $('deviceStatus').textContent = 'The code expired. Click "Sign in with Device Flow" again.';
       return;
     }
@@ -406,6 +574,7 @@ async function startDeviceFlow() {
       if (poll.status === 'authorized') {
         clearInterval(devicePollTimer);
         devicePollTimer = null;
+        stopDeviceCountdown();
         $('deviceBox').classList.add('hidden');
         showUser(poll.user);
         log(`Signed in to GitHub as ${poll.user.login} (Device Flow)`);
@@ -417,7 +586,9 @@ async function startDeviceFlow() {
     } catch (err) {
       clearInterval(devicePollTimer);
       devicePollTimer = null;
+      stopDeviceCountdown();
       $('deviceStatus').textContent = 'Device Flow failed: ' + err.message;
+      await loadLoginDiagnostics().catch(() => {});
     }
   }, interval);
 }
@@ -434,7 +605,7 @@ async function logoutGithub() {
 }
 
 /* ------------------------------------------------------------------ */
-/* OAuth Web Flow (v2.1): Connect GitHub — the recommended sign-in     */
+/* OAuth Web Flow (v2.1, kept in v3.0): Connect GitHub — the recommended sign-in */
 /* ------------------------------------------------------------------ */
 
 // Reads /oauth/status and updates the setup form. Never throws: an
@@ -479,7 +650,21 @@ async function startOAuthWeb() {
   if (!oauthConfigured) {
     throw new Error('OAuth Web Flow is not configured yet. Open "OAUTH APP SETUP" above: create a GitHub OAuth App (github.com → Settings → Developer settings → OAuth Apps), paste its Authorization callback URL from this page, then save its Client ID + Client Secret here. Or sign in with a Personal Access Token / Device Flow instead.');
   }
-  const res = await gh('/oauth/start');
+  let res;
+  try {
+    res = await gh('/oauth/start');
+  } catch (err) {
+    // v3.0: the bridge now names the missing step. Point the user at the
+    // OAuth App setup form instead of a generic "failed" message.
+    if (/OAUTH_APP_NOT_CONFIGURED/.test(err.message)) {
+      $('oauthConfigDetails').open = true;
+      $('oauthConnectHint').textContent = 'Chưa cấu hình OAuth App: mở "CÁCH 1 — CẤU HÌNH OAUTH APP" bên dưới, tạo OAuth App trên github.com rồi lưu Client ID + Client Secret ở đây.';
+      await loadLoginDiagnostics().catch(() => {});
+      throw new Error('OAuth App chưa được cấu hình trên bridge. Xem hướng dẫn trong phần "CÁCH 1 — CẤU HÌNH OAUTH APP" bên dưới.');
+    }
+    await loadLoginDiagnostics().catch(() => {});
+    throw err;
+  }
   if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) chrome.tabs.create({ url: res.authorizeUrl });
   else if (typeof window !== 'undefined' && window.open) window.open(res.authorizeUrl, '_blank');
   log('GitHub sign-in opened in a new tab. Approve the app there — this page will pick up the account automatically.');
@@ -576,15 +761,19 @@ function showView(name) {
   $('view-repos').classList.toggle('hidden', name !== 'repos');
   $('view-repo').classList.toggle('hidden', name !== 'repo');
   $('view-local').classList.toggle('hidden', name !== 'local');
+  $('view-profile').classList.toggle('hidden', name !== 'profile');
+  $('view-settings').classList.toggle('hidden', name !== 'settings');
   $('navRepos').classList.toggle('active', name === 'repos' || name === 'repo');
   $('navLocal').classList.toggle('active', name === 'local');
+  $('navProfile').classList.toggle('active', name === 'profile');
+  $('navSettings').classList.toggle('active', name === 'settings');
 }
 
 function showRepoTab(tab) {
   document.querySelectorAll('.tabs button').forEach((b) => {
     b.classList.toggle('active', b.dataset.tab === tab);
   });
-  for (const name of ['overview', 'files', 'commits', 'branches', 'issues', 'pulls']) {
+  for (const name of ['overview', 'files', 'commits', 'branches', 'issues', 'pulls', 'releases']) {
     $('tab-' + name).classList.toggle('hidden', name !== tab);
   }
 }
@@ -715,6 +904,17 @@ function renderRepos() {
     hasUpdate.textContent = '';
     meta.append(hasUpdate);
 
+    // v3.0: per-repo .zip download (stops the click so the repo does not open).
+    const zipBtn = document.createElement('button');
+    zipBtn.className = 'mini zip-btn';
+    zipBtn.textContent = '⬇ .zip';
+    zipBtn.title = 'Download this repository as a .zip';
+    zipBtn.onclick = (e) => {
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      run('Repository .zip downloaded', () => downloadRepoZip(repo));
+    };
+    meta.append(zipBtn);
+
     item.append(meta);
     container.append(item);
   }
@@ -729,6 +929,43 @@ async function loadRepos(force) {
   showUpdateBadge();
   renderRepos();
   return allRepos;
+}
+
+// v3.0 — download a GitHub repo as .zip (bridge v3.0 route). `ref` is a
+// branch name; defaults to the repo's default branch.
+async function downloadRepoZip(repo, ref) {
+  const parts = String(repo.full_name || '').split('/');
+  if (parts.length !== 2) throw new Error('Invalid repository name');
+  const branch = ref || repo.default_branch || 'main';
+  const filename = `${repo.name || parts[1]}-${branch}.zip`;
+  log(`Downloading ${repo.full_name}@${branch} as ${filename}…`);
+  const res = await downloadBlob(`/api/github/repos/${parts[0]}/${parts[1]}/zip?ref=${encodeURIComponent(branch)}`, 'GET', undefined, filename);
+  log(`Downloaded ${res.filename} (${formatNumber(res.size)} B)`);
+  return res;
+}
+
+async function downloadCurrentRepoZip() {
+  if (!currentRepo) throw new Error('Open a repository first');
+  const branch = $('fileBranchSelect').value || currentRepo.default_branch;
+  await downloadRepoZip({ full_name: currentRepo.full_name, name: currentRepo.repo, default_branch: currentRepo.default_branch }, branch);
+}
+
+// v3.0 — create a repository on GitHub (bridge v3.0 route).
+async function createRepo() {
+  const name = $('createRepoName').value.trim();
+  if (!name) throw new Error('Enter a name for the new repository');
+  const res = await gh('/repos', 'POST', {
+    name,
+    description: $('createRepoDesc').value.trim(),
+    private: !!$('createRepoPrivate').checked,
+    auto_init: true,
+  });
+  $('createRepoName').value = '';
+  $('createRepoDesc').value = '';
+  $('createRepoPrivate').checked = false;
+  log(`Repository created: ${res.full_name || res.name || name}`);
+  await loadRepos(true);
+  return res;
 }
 
 /* ------------------------------------------------------------------ */
@@ -799,6 +1036,8 @@ async function loadRepoBranches() {
     select.append(opt);
   }
   if (currentRepo.default_branch) select.value = currentRepo.default_branch;
+  // v3.0: a saved default branch (Settings) wins when it exists here.
+  if (settingsDefaultBranch && list.some((b) => b.name === settingsDefaultBranch)) select.value = settingsDefaultBranch;
   await loadFileTree(currentPath);
 }
 
@@ -830,6 +1069,8 @@ async function loadRepoIssues() {
   if (!currentRepo) return;
   const res = await gh(`/repos/${currentRepo.owner}/${currentRepo.repo}/issues?state=open&per_page=20`);
   const container = $('issueList');
+  container.classList.remove('hidden');
+  $('issueDetail').classList.add('hidden');
   container.className = '';
   container.innerHTML = '';
   const issues = res.issues || [];
@@ -841,6 +1082,9 @@ async function loadRepoIssues() {
   for (const i of issues) {
     const row = document.createElement('div');
     row.className = 'issueitem';
+    row.style.cursor = 'pointer';
+    row.title = 'Click to view details and comments';
+    row.onclick = () => showIssueDetail(i.number).catch((err) => log('ERROR: ' + err.message));
     const title = document.createElement('b');
     const num = document.createElement('span');
     num.className = 'num';
@@ -878,7 +1122,18 @@ async function loadRepoPulls() {
     title.append(document.createTextNode(p.title + (p.draft ? ' (draft)' : '')));
     const meta = document.createElement('small');
     meta.textContent = `${p.user || ''} · ${p.head} → ${p.base} · opened ${timeAgo(p.created_at)}`;
-    row.append(title, meta);
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const mergeBtn = document.createElement('button');
+    mergeBtn.className = 'mini blue';
+    mergeBtn.textContent = 'Merge';
+    mergeBtn.onclick = () => run('Pull request merged', () => mergePullRequest(p.number));
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'mini';
+    closeBtn.textContent = 'Close';
+    closeBtn.onclick = () => run('Pull request closed', () => closePullRequest(p.number));
+    actions.append(mergeBtn, closeBtn);
+    row.append(title, meta, actions);
     container.append(row);
   }
 }
@@ -936,6 +1191,360 @@ async function showFile(relPath) {
   $('fileViewer').textContent = content.length > 200000
     ? content.slice(0, 200000) + '\n\n… file truncated at 200,000 characters …'
     : content;
+  // v3.0: remember the open file so it can be edited / deleted.
+  selectedFile = relPath;
+  selectedFileSha = res.sha || '';
+  $('fileEditWrap').classList.remove('hidden');
+  $('fileEditArea').value = content;
+}
+
+/* ------------------------------------------------------------------ */
+/* v3.0 — Repo actions: star / unstar / fork / edit description /      */
+/* delete, releases, code search, file edit / create / delete / upload */
+/* ------------------------------------------------------------------ */
+
+function repoApiBase() {
+  if (!currentRepo) throw new Error('Open a repository first');
+  return `/repos/${currentRepo.owner}/${currentRepo.repo}`;
+}
+
+async function starRepo() {
+  await gh(repoApiBase() + '/star', 'PUT', {});
+  log(`Starred ${currentRepo.full_name} ★`);
+  await openRepoRefreshCounts();
+}
+
+async function unstarRepo() {
+  await gh(repoApiBase() + '/star', 'DELETE', {});
+  log(`Unstarred ${currentRepo.full_name}`);
+  await openRepoRefreshCounts();
+}
+
+async function forkRepo() {
+  const res = await gh(repoApiBase() + '/fork', 'POST', {});
+  log(`Forked ${currentRepo.full_name} → ${res.full_name || 'your account'}`);
+  await loadRepos(true);
+  return res;
+}
+
+async function editRepoDescription() {
+  const current = $('detailDesc').textContent === 'No description.' ? '' : $('detailDesc').textContent;
+  const desc = prompt('New description for ' + currentRepo.full_name + ':', current);
+  if (desc === null) return; // cancelled
+  const res = await gh(repoApiBase(), 'PATCH', { description: desc });
+  $('detailDesc').textContent = (res && res.description) || desc || 'No description.';
+  log('Repository description updated.');
+  await loadRepos(false);
+  return res;
+}
+
+async function deleteRepo() {
+  if (!currentRepo) throw new Error('Open a repository first');
+  const fullName = currentRepo.full_name;
+  if (!confirm(`Delete the GitHub repository ${fullName}?\n\nThis cannot be undone. All code, issues and pull requests will be gone.`)) return;
+  if (!confirm(`Really delete ${fullName}? Click OK to confirm the deletion.`)) return;
+  await gh(repoApiBase(), 'DELETE', { confirm: true });
+  log(`Repository ${fullName} deleted.`);
+  currentRepo = null;
+  showView('repos');
+  await loadRepos(true);
+}
+
+/* --- Releases --- */
+
+async function loadReleases() {
+  if (!currentRepo) return;
+  const res = await gh(repoApiBase() + '/releases');
+  const container = $('releaseList');
+  container.className = '';
+  container.innerHTML = '';
+  const releases = res.releases || [];
+  if (!releases.length) {
+    container.className = 'empty';
+    container.textContent = 'No releases yet.';
+    return;
+  }
+  for (const r of releases) {
+    const row = document.createElement('div');
+    row.className = 'commititem';
+    const title = document.createElement('b');
+    title.textContent = (r.tag_name || '') + (r.name ? ' — ' + r.name : '') +
+      (r.draft ? ' (draft)' : '') + (r.prerelease ? ' (pre-release)' : '');
+    const meta = document.createElement('small');
+    meta.textContent = (r.body || '').slice(0, 200);
+    row.append(title, meta);
+    const assets = r.assets || [];
+    for (const a of assets) {
+      const assetBtn = document.createElement('button');
+      assetBtn.className = 'mini';
+      assetBtn.textContent = `⬇ ${a.name} (${formatNumber(a.size)} B · ${a.download_count || 0} downloads)`;
+      assetBtn.onclick = () => run('Release asset downloaded', async () => {
+        await downloadBlob(`${repoApiBase()}/releases/assets/${a.id}?name=${encodeURIComponent(a.name)}`, 'GET', undefined, a.name);
+        log(`Downloaded asset ${a.name}`);
+      });
+      row.append(assetBtn);
+    }
+    container.append(row);
+  }
+}
+
+async function createRelease() {
+  const tag = $('releaseTag').value.trim();
+  if (!tag) throw new Error('Enter a tag name for the release (e.g. v1.0.0)');
+  const res = await gh(repoApiBase() + '/releases', 'POST', {
+    tag_name: tag,
+    name: $('releaseName').value.trim() || tag,
+    body: $('releaseBody').value.trim(),
+    draft: !!$('releaseDraft').checked,
+    prerelease: !!$('releasePrerelease').checked,
+  });
+  $('releaseTag').value = '';
+  $('releaseName').value = '';
+  $('releaseBody').value = '';
+  $('releaseDraft').checked = false;
+  $('releasePrerelease').checked = false;
+  log(`Release ${res.tag_name || tag} created.`);
+  await loadReleases();
+  return res;
+}
+
+/* --- Code search --- */
+
+async function searchCode() {
+  if (!currentRepo) return;
+  const q = $('codeSearchInput').value.trim();
+  if (!q) throw new Error('Enter text to search for in this repository');
+  const res = await gh(`/search/code?q=${encodeURIComponent(q)}&repo=${encodeURIComponent(currentRepo.full_name)}`);
+  const container = $('codeSearchResults');
+  container.className = '';
+  container.innerHTML = '';
+  const items = res.items || [];
+  $('codeSearchResults').classList.remove('hidden');
+  if (!items.length) {
+    container.className = 'empty';
+    container.textContent = `No code matches "${q}" in ${currentRepo.full_name}.`;
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement('button');
+    row.className = 'file-row';
+    const icon = document.createElement('span');
+    icon.textContent = '🔎';
+    const name = document.createElement('span');
+    name.className = 'fname';
+    name.textContent = item.name || item.path;
+    const meta = document.createElement('span');
+    meta.className = 'fmeta';
+    meta.textContent = item.path || '';
+    row.append(icon, name, meta);
+    row.onclick = () => {
+      showRepoTab('files');
+      showFile(item.path).catch((err) => log('ERROR: ' + err.message));
+    };
+    container.append(row);
+  }
+  log(`${items.length} code result(s) for "${q}"`);
+}
+
+/* --- File edit / create / delete / upload --- */
+
+async function saveEditedFile() {
+  if (!currentRepo || !selectedFile) throw new Error('Open a file first');
+  const branch = $('fileBranchSelect').value || currentRepo.default_branch;
+  const content = $('fileEditArea').value;
+  const res = await gh(repoApiBase() + '/contents', 'PUT', {
+    path: selectedFile,
+    message: `Update ${selectedFile} via PixiJS GitHub Sync`,
+    content,
+    sha: selectedFileSha || undefined,
+    branch,
+  });
+  if (res && res.content && res.content.sha) selectedFileSha = res.content.sha;
+  log(`Saved ${selectedFile} ✓`);
+  await loadFileTree(currentPath);
+  return res;
+}
+
+async function createNewFile() {
+  if (!currentRepo) throw new Error('Open a repository first');
+  const name = $('newFileName').value.trim();
+  if (!name) throw new Error('Enter a name for the new file');
+  const branch = $('fileBranchSelect').value || currentRepo.default_branch;
+  const path = currentPath ? currentPath + '/' + name : name;
+  const res = await gh(repoApiBase() + '/contents', 'PUT', {
+    path,
+    message: `Create ${path} via PixiJS GitHub Sync`,
+    content: $('newFileContent').value,
+    branch,
+  });
+  $('newFileName').value = '';
+  $('newFileContent').value = '';
+  log(`Created ${path} ✓`);
+  await loadFileTree(currentPath);
+  return res;
+}
+
+async function deleteCurrentFile() {
+  if (!currentRepo || !selectedFile) throw new Error('Open a file first');
+  if (!confirm(`Delete ${selectedFile} from ${currentRepo.full_name}?\n\nThis commits the deletion to the branch.`)) return;
+  const branch = $('fileBranchSelect').value || currentRepo.default_branch;
+  await gh(repoApiBase() + '/contents', 'DELETE', {
+    path: selectedFile,
+    message: `Delete ${selectedFile} via PixiJS GitHub Sync`,
+    sha: selectedFileSha,
+    branch,
+  });
+  log(`Deleted ${selectedFile} ✓`);
+  $('fileViewerWrap').classList.add('hidden');
+  $('fileEditWrap').classList.add('hidden');
+  selectedFile = '';
+  selectedFileSha = '';
+  await loadFileTree(currentPath);
+}
+
+async function uploadFileToRepo(file) {
+  if (!currentRepo) throw new Error('Open a repository first');
+  if (!file) throw new Error('Choose a file to upload');
+  if (typeof FileReader === 'undefined') throw new Error('File upload is not available in this environment');
+  const branch = $('fileBranchSelect').value || currentRepo.default_branch;
+  const path = currentPath ? currentPath + '/' + file.name : file.name;
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      resolve(dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl);
+    };
+    reader.onerror = () => reject(new Error('Could not read ' + file.name));
+    reader.readAsDataURL(file);
+  });
+  const res = await gh(repoApiBase() + '/contents', 'PUT', {
+    path,
+    message: `Upload ${path} via PixiJS GitHub Sync`,
+    contentBase64: base64,
+    branch,
+  });
+  log(`Uploaded ${path} ✓`);
+  await loadFileTree(currentPath);
+  return res;
+}
+
+// Refresh the star/fork/issue counters in the repo header after an action.
+async function openRepoRefreshCounts() {
+  if (!currentRepo) return;
+  try {
+    const res = await gh('/repos/all?force=1');
+    const match = (res.repos || []).find((r) => r.full_name === currentRepo.full_name);
+    if (match) {
+      $('detailStars').textContent = formatNumber(match.stargazers_count);
+      $('detailForks').textContent = formatNumber(match.forks_count);
+      $('detailIssues').textContent = formatNumber(match.open_issues_count);
+    }
+  } catch (_) { /* best-effort — the counts are cosmetic */ }
+}
+
+/* --- Issues: create / detail / comment / close-reopen --- */
+
+async function createIssue() {
+  if (!currentRepo) return;
+  const title = $('issueTitle').value.trim();
+  if (!title) throw new Error('Enter an issue title');
+  const labels = $('issueLabels').value.split(',').map((s) => s.trim()).filter(Boolean);
+  const res = await gh(repoApiBase() + '/issues', 'POST', {
+    title,
+    body: $('issueBody').value.trim(),
+    labels,
+  });
+  $('issueTitle').value = '';
+  $('issueBody').value = '';
+  $('issueLabels').value = '';
+  log(`Issue #${(res && res.number) || '?'} created.`);
+  await loadRepoIssues();
+  return res;
+}
+
+async function showIssueDetail(number) {
+  if (!currentRepo) return;
+  currentIssueNumber = number;
+  const res = await gh(`${repoApiBase()}/issues/${number}`);
+  const issue = res.issue || res;
+  $('issueDetail').classList.remove('hidden');
+  $('issueList').classList.add('hidden');
+  $('issueDetailTitle').textContent = `#${issue.number || number} — ${issue.title || ''}`;
+  $('issueDetailMeta').textContent = `${issue.user || ''} · ${issue.state || ''} · opened ${timeAgo(issue.created_at)} · ${issue.comments || 0} comments`;
+  $('issueDetailBody').textContent = issue.body || '(No description)';
+  const commentsBox = $('issueComments');
+  commentsBox.innerHTML = '';
+  const comments = res.comments || issue.commentsList || [];
+  if (!comments.length) {
+    commentsBox.className = 'empty';
+    commentsBox.textContent = 'No comments yet.';
+  } else {
+    commentsBox.className = '';
+    for (const c of comments) {
+      const row = document.createElement('div');
+      row.className = 'commititem';
+      const title = document.createElement('b');
+      title.textContent = (c.user || c.author || 'unknown');
+      const meta = document.createElement('small');
+      meta.textContent = (c.body || '') + (c.created_at ? ' · ' + timeAgo(c.created_at) : '');
+      row.append(title, meta);
+      commentsBox.append(row);
+    }
+  }
+  $('issueCloseBtn').textContent = issue.state === 'closed' ? 'Reopen issue' : 'Close issue';
+}
+
+async function addIssueComment() {
+  if (!currentRepo || currentIssueNumber == null) throw new Error('Open an issue first');
+  const body = $('commentBody').value.trim();
+  if (!body) throw new Error('Write the comment first');
+  await gh(`${repoApiBase()}/issues/${currentIssueNumber}/comments`, 'POST', { body });
+  $('commentBody').value = '';
+  log('Comment added.');
+  await showIssueDetail(currentIssueNumber);
+}
+
+async function toggleIssueState() {
+  if (!currentRepo || currentIssueNumber == null) throw new Error('Open an issue first');
+  const closing = $('issueCloseBtn').textContent.indexOf('Close') === 0;
+  await gh(`${repoApiBase()}/issues/${currentIssueNumber}`, 'PATCH', { state: closing ? 'closed' : 'open' });
+  log(`Issue #${currentIssueNumber} ${closing ? 'closed' : 'reopened'}.`);
+  await showIssueDetail(currentIssueNumber);
+  await loadRepoIssues();
+}
+
+/* --- Pull requests: create / merge / close --- */
+
+async function createPullRequest() {
+  if (!currentRepo) return;
+  const title = $('prTitle').value.trim();
+  const head = $('prHead').value.trim();
+  const base = $('prBase').value.trim() || currentRepo.default_branch;
+  if (!title || !head) throw new Error('Enter a PR title and the head branch');
+  const res = await gh(repoApiBase() + '/pulls', 'POST', { title, head, base, body: $('prBody').value.trim() });
+  $('prTitle').value = '';
+  $('prHead').value = '';
+  $('prBody').value = '';
+  log(`Pull request #${(res && res.number) || '?'} created (${head} → ${base}).`);
+  await loadRepoPulls();
+  return res;
+}
+
+async function mergePullRequest(number) {
+  if (!currentRepo) return;
+  const method = $('prMergeMethod').value || 'merge';
+  if (!confirm(`Merge pull request #${number} (${method})?`)) return;
+  await gh(`${repoApiBase()}/pulls/${number}/merge`, 'PUT', { merge_method: method });
+  log(`Pull request #${number} merged (${method}).`);
+  await loadRepoPulls();
+}
+
+async function closePullRequest(number) {
+  if (!currentRepo) return;
+  if (!confirm(`Close pull request #${number} without merging?`)) return;
+  await gh(`${repoApiBase()}/pulls/${number}`, 'PATCH', { state: 'closed' });
+  log(`Pull request #${number} closed.`);
+  await loadRepoPulls();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1490,6 +2099,256 @@ async function refreshAllLocal() {
   await loadStashList().catch(() => {});
   await loadRemotes().catch(() => {});
   await loadDiffSummary().catch(() => {});
+  await loadTags().catch(() => {});
+}
+
+/* ------------------------------------------------------------------ */
+/* v3.0 — Notifications, profile, settings                             */
+/* ------------------------------------------------------------------ */
+
+async function loadNotifications() {
+  let data;
+  try {
+    data = await gh('/notifications');
+  } catch (err) {
+    $('notifList').className = 'empty';
+    $('notifList').textContent = 'Could not load notifications: ' + err.message +
+      ' (needs bridge v3.0 — older bridges do not have this route).';
+    return null;
+  }
+  const list = (data && data.notifications) || [];
+  notifUnreadCount = list.filter((n) => n.unread).length;
+  updateNotifBadge();
+  const container = $('notifList');
+  container.innerHTML = '';
+  if (!list.length) {
+    container.className = 'empty';
+    container.textContent = 'No notifications.';
+    return data;
+  }
+  container.className = '';
+  for (const n of list) {
+    const row = document.createElement('div');
+    row.className = 'commititem';
+    const title = document.createElement('b');
+    title.textContent = (n.unread ? '● ' : '') + ((n.subject && n.subject.title) || 'Notification');
+    const meta = document.createElement('small');
+    meta.textContent = `${(n.repository && n.repository.full_name) || ''} · ${n.reason || ''} · ${timeAgo(n.updated_at)}`;
+    row.append(title, meta);
+    container.append(row);
+  }
+  return data;
+}
+
+function updateNotifBadge() {
+  const badge = $('notifBadge');
+  if (!settingsNotifications || notifUnreadCount <= 0) {
+    badge.classList.add('hidden');
+    badge.textContent = '';
+    return;
+  }
+  badge.classList.remove('hidden');
+  badge.textContent = String(notifUnreadCount);
+}
+
+async function markAllNotificationsRead() {
+  await gh('/notifications/read', 'POST', {});
+  notifUnreadCount = 0;
+  updateNotifBadge();
+  log('All notifications marked as read.');
+  await loadNotifications();
+}
+
+async function loadProfile() {
+  let data;
+  try {
+    data = await gh('/profile');
+  } catch (err) {
+    $('profileStats').textContent = 'Could not load profile: ' + err.message +
+      ' (needs bridge v3.0 — older bridges do not have this route).';
+    return null;
+  }
+  const p = (data && data.profile) || {};
+  $('profileAvatar').src = p.avatar_url || '';
+  $('profileAvatar').alt = p.login || '';
+  $('profileName').textContent = p.name || p.login || '—';
+  $('profileLogin').textContent = p.login ? '@' + p.login : '—';
+  $('profileEmail').textContent = p.email || '—';
+  $('profileBio').textContent = p.bio || '—';
+  $('profileCompany').textContent = p.company || '—';
+  $('profileBlog').textContent = p.blog || '—';
+  $('profileLocation').textContent = p.location || '—';
+  $('profileStats').textContent =
+    `${p.public_repos != null ? p.public_repos + ' public repos' : ''}` +
+    `${p.followers != null ? ' · ' + p.followers + ' followers' : ''}` +
+    `${p.following != null ? ' · following ' + p.following : ''}` +
+    `${p.created_at ? ' · joined ' + new Date(p.created_at).toLocaleDateString() : ''}`;
+  const link = $('profileLink');
+  if (p.html_url) {
+    link.textContent = p.html_url;
+    link.href = p.html_url;
+    link.classList.remove('hidden');
+  } else {
+    link.classList.add('hidden');
+  }
+  return data;
+}
+
+function applySettingsToUI() {
+  $('settingsInterval').value = String($('autoUpdateInterval').value || '60');
+  $('settingsDefaultBranch').value = settingsDefaultBranch;
+  $('settingsAutoSync').checked = $('autoSyncToggle').checked;
+  $('settingsNotifications').checked = settingsNotifications;
+  updateNotifBadge();
+}
+
+async function saveSettings() {
+  const intervalSeconds = Number($('settingsInterval').value) || 60;
+  settingsDefaultBranch = $('settingsDefaultBranch').value.trim();
+  settingsNotifications = !!$('settingsNotifications').checked;
+  const autoSync = !!$('settingsAutoSync').checked;
+  await chrome.storage.local.set({
+    settingsDefaultBranch,
+    settingsNotifications,
+    autoUpdateInterval: intervalSeconds,
+  });
+  $('autoUpdateInterval').value = String(intervalSeconds);
+  $('settingsStatus').textContent = 'Settings saved ✓' +
+    (settingsDefaultBranch ? ` — default branch for new file trees: ${settingsDefaultBranch}.` : '');
+  updateNotifBadge();
+  // Push interval + auto-sync to the bridge (same endpoint as the
+  // auto-update bar); a missing bridge route just logs the error.
+  try {
+    await setAutoUpdateUI($('autoUpdateToggle').checked, intervalSeconds, autoSync);
+  } catch (err) {
+    log('Settings saved locally; could not push auto-update to the bridge: ' + err.message);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* v3.0 — Local Git: cherry-pick / revert / reset, tags, local .zip   */
+/* ------------------------------------------------------------------ */
+
+async function cherryPickCommit() {
+  const sha = $('cpSha').value.trim();
+  if (!sha) throw new Error('Enter the commit SHA to cherry-pick');
+  const res = await api('/api/git/cherry-pick', 'POST', { sha });
+  $('cpSha').value = '';
+  log('Cherry-picked ' + sha.slice(0, 7) + ' ✓');
+  await status();
+  await history();
+  return res;
+}
+
+async function revertCommit() {
+  const sha = $('cpSha').value.trim();
+  if (!sha) throw new Error('Enter the commit SHA to revert');
+  const res = await api('/api/git/revert', 'POST', { sha });
+  $('cpSha').value = '';
+  log('Reverted ' + sha.slice(0, 7) + ' ✓');
+  await status();
+  await history();
+  return res;
+}
+
+async function resetBranch() {
+  const mode = $('resetMode').value || 'mixed';
+  const ref = $('resetRef').value.trim() || 'HEAD';
+  if (mode === 'hard' && !$('resetHardConfirm').checked) {
+    throw new Error('Hard reset discards uncommitted changes — tick the confirmation checkbox first.');
+  }
+  const res = await api('/api/git/reset', 'POST', { mode, ref, confirm: mode === 'hard' });
+  $('resetHardConfirm').checked = false;
+  log(`Reset (${mode}) to ${ref} ✓`);
+  await status();
+  await history();
+  return res;
+}
+
+async function loadTags() {
+  const data = await api('/api/git/tags');
+  const container = $('tagList');
+  const tags = data.tags || [];
+  container.innerHTML = '';
+  if (!tags.length) {
+    container.className = 'empty';
+    container.textContent = 'No tags yet.';
+    return data;
+  }
+  container.className = '';
+  for (const tag of tags) {
+    const row = document.createElement('div');
+    row.className = 'tag-row';
+    const name = document.createElement('b');
+    name.textContent = tag.name;
+    const meta = document.createElement('span');
+    meta.className = 'path';
+    meta.textContent = tag.sha ? tag.sha.slice(0, 7) : '';
+    const pushBtn = document.createElement('button');
+    pushBtn.textContent = 'Push';
+    pushBtn.onclick = () => run('Tag pushed', async () => {
+      await api('/api/git/tag/push', 'POST', { name: tag.name });
+      await loadTags();
+    });
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Delete';
+    delBtn.onclick = () => run('Tag deleted', async () => {
+      if (!confirm(`Delete local tag ${tag.name}?`)) return;
+      await api('/api/git/tag/delete', 'POST', { name: tag.name });
+      await loadTags();
+    });
+    row.append(name, meta, pushBtn, delBtn);
+    container.append(row);
+  }
+  return data;
+}
+
+async function createTag() {
+  const name = $('newTagName').value.trim();
+  if (!name) throw new Error('Enter a name for the new tag');
+  const res = await api('/api/git/tag/create', 'POST', {
+    name,
+    message: $('newTagMessage').value.trim() || undefined,
+    ref: $('newTagRef').value.trim() || undefined,
+  });
+  $('newTagName').value = '';
+  $('newTagMessage').value = '';
+  $('newTagRef').value = '';
+  log(`Tag ${name} created ✓`);
+  await loadTags();
+  return res;
+}
+
+async function deleteTag() {
+  const name = $('deleteTagName').value.trim();
+  if (!name) throw new Error('Enter the tag to delete');
+  if (!confirm(`Delete local tag ${name}?`)) return;
+  await api('/api/git/tag/delete', 'POST', { name });
+  $('deleteTagName').value = '';
+  log(`Tag ${name} deleted ✓`);
+  await loadTags();
+}
+
+async function pushTag() {
+  const name = $('pushTagName').value.trim();
+  if (!name) throw new Error('Enter the tag to push');
+  const res = await api('/api/git/tag/push', 'POST', {
+    name,
+    remote: $('syncRemote').value.trim() || 'origin',
+  });
+  $('pushTagName').value = '';
+  log(`Tag ${name} pushed ✓`);
+  return res;
+}
+
+async function exportLocalZip() {
+  const branch = $('branch').textContent && $('branch').textContent !== '—' ? $('branch').textContent : undefined;
+  const repoName = $('repoName').textContent && $('repoName').textContent !== 'Not connected' ? $('repoName').textContent : 'repo';
+  const filename = `${repoName}-${branch || 'HEAD'}.zip`;
+  log(`Exporting local repository as ${filename}…`);
+  const res = await downloadBlob('/api/git/archive-zip', 'POST', { ref: branch }, filename);
+  log(`Exported ${res.filename} (${formatNumber(res.size)} B)`);
+  return res;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1505,7 +2364,16 @@ $('navLocal').onclick = () => {
     loadStashList().catch(() => {});
     loadRemotes().catch(() => {});
     loadDiffSummary().catch(() => {});
+    loadTags().catch(() => {});
   }
+};
+$('navProfile').onclick = () => {
+  showView('profile');
+  loadProfile().catch((err) => log('ERROR: ' + err.message));
+};
+$('navSettings').onclick = () => {
+  showView('settings');
+  applySettingsToUI();
 };
 $('backToRepos').onclick = () => { currentRepo = null; showView('repos'); };
 $('reconnectBtn').onclick = () => run('Reconnect', reconnectNow);
@@ -1535,6 +2403,20 @@ $('oauthCopyCallbackBtn').onclick = () => run('Callback URL copied', async () =>
 
 $('loginPatBtn').onclick = () => run('GitHub sign-in', loginWithPat);
 $('deviceFlowBtn').onclick = () => run('Device Flow started', startDeviceFlow);
+
+// v3.0: live token-shape feedback while typing — an email or password
+// pasted here gets the red warning immediately, before any request.
+$('patInput').oninput = () => {
+  const v = $('patInput').value.trim();
+  if (!v) { $('patWarning').classList.add('hidden'); return; }
+  if (looksLikeGithubToken(v)) {
+    $('patWarning').classList.add('hidden');
+  } else {
+    $('patWarning').textContent = TOKEN_FORMAT_HINT;
+    $('patWarning').classList.remove('hidden');
+  }
+};
+$('diagBtn').onclick = () => run('Login diagnostics', loadLoginDiagnostics);
 
 $('globalSearch').oninput = () => { if (allRepos.length) renderRepos(); };
 $('repoSearch').oninput = () => renderRepos();
@@ -1581,10 +2463,59 @@ document.querySelectorAll('.tabs button').forEach((button) => {
     if (tab === 'branches') loadRepoBranches().catch((err) => log('ERROR: ' + err.message));
     if (tab === 'issues') loadRepoIssues().catch((err) => log('ERROR: ' + err.message));
     if (tab === 'pulls') loadRepoPulls().catch((err) => log('ERROR: ' + err.message));
+    if (tab === 'releases') loadReleases().catch((err) => log('ERROR: ' + err.message));
     if (tab === 'files') loadFileTree(currentPath).catch((err) => log('ERROR: ' + err.message));
     if (tab === 'overview') loadReadme().catch((err) => log('ERROR: ' + err.message));
   };
 });
+
+// v3.0 — repo detail actions + create repo + releases + code search.
+$('createRepoBtn').onclick = () => run('Repository created', createRepo);
+$('repoZipBtn').onclick = () => run('Repository .zip downloaded', downloadCurrentRepoZip);
+$('repoStarBtn').onclick = () => run('Repository starred', starRepo);
+$('repoUnstarBtn').onclick = () => run('Repository unstarred', unstarRepo);
+$('repoForkBtn').onclick = () => run('Repository forked', forkRepo);
+$('repoEditDescBtn').onclick = () => run('Description updated', editRepoDescription);
+$('repoDeleteBtn').onclick = () => run('Repository deleted', deleteRepo);
+$('reloadReleases').onclick = () => run('Releases refreshed', loadReleases);
+$('createReleaseBtn').onclick = () => run('Release created', createRelease);
+$('codeSearchBtn').onclick = () => run('Code search', searchCode);
+$('fileSaveBtn').onclick = () => run('File saved', saveEditedFile);
+$('newFileBtn').onclick = () => run('File created', createNewFile);
+$('fileDeleteBtn').onclick = () => run('File deleted', deleteCurrentFile);
+$('fileUploadInput').onchange = () => run('File uploaded', async () => {
+  const input = $('fileUploadInput');
+  const file = input.files && input.files[0];
+  await uploadFileToRepo(file);
+  input.value = '';
+});
+$('createIssueBtn').onclick = () => run('Issue created', createIssue);
+$('issueDetailBackBtn').onclick = () => { $('issueDetail').classList.add('hidden'); $('issueList').classList.remove('hidden'); };
+$('addCommentBtn').onclick = () => run('Comment added', addIssueComment);
+$('issueCloseBtn').onclick = () => run('Issue state changed', toggleIssueState);
+$('createPrBtn').onclick = () => run('Pull request created', createPullRequest);
+
+// v3.0 — notifications bell + profile + settings.
+$('notifBtn').onclick = () => {
+  const panel = $('notifPanel');
+  const willShow = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !willShow);
+  if (willShow) loadNotifications().catch((err) => log('ERROR: ' + err.message));
+};
+$('notifMarkReadBtn').onclick = () => run('Notifications marked as read', markAllNotificationsRead);
+$('notifCloseBtn').onclick = () => $('notifPanel').classList.add('hidden');
+$('reloadProfile').onclick = () => run('Profile refreshed', loadProfile);
+$('saveSettingsBtn').onclick = () => run('Settings saved', saveSettings);
+
+// v3.0 — local git: cherry-pick / revert / reset, tags, local .zip.
+$('localZipBtn').onclick = () => run('Local repository exported as .zip', exportLocalZip);
+$('cherryPickBtn').onclick = () => run('Cherry-pick completed', cherryPickCommit);
+$('revertBtn').onclick = () => run('Revert completed', revertCommit);
+$('resetBtn').onclick = () => run('Reset completed', resetBranch);
+$('refreshTagsBtn').onclick = () => run('Tags refreshed', loadTags);
+$('createTagBtn').onclick = () => run('Tag created', createTag);
+$('deleteTagBtn').onclick = () => run('Tag deleted', deleteTag);
+$('pushTagBtn').onclick = () => run('Tag pushed', pushTag);
 
 $('reloadCommits').onclick = () => run('Commits refreshed', loadRepoCommits);
 $('reloadBranches').onclick = () => run('Branches refreshed', loadRepoBranches);
@@ -1718,6 +2649,13 @@ $('copyPath').onclick = () => run('Repository path copied', async () => {
   $('token').value = c.token;
   $('autoUpdateToggle').checked = !!c.autoUpdateEnabled;
   if (c.autoUpdateInterval) $('autoUpdateInterval').value = String(c.autoUpdateInterval);
+  // v3.0 settings from storage.
+  settingsDefaultBranch = c.settingsDefaultBranch;
+  settingsNotifications = c.settingsNotifications;
+  $('settingsInterval').value = String(c.autoUpdateInterval);
+  $('settingsDefaultBranch').value = settingsDefaultBranch;
+  $('settingsNotifications').checked = settingsNotifications;
+  updateNotifBadge();
 
   showView('repos');
   startHealthPoll();

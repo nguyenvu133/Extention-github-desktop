@@ -506,7 +506,7 @@ async function main() {
   check('oauth status: not configured at first', r.configured === false && r.clientIdConfigured === false && r.clientSecretConfigured === false, JSON.stringify(r));
   check('oauth status leaks no secret', !JSON.stringify(r).includes(TEST_CLIENT_SECRET), JSON.stringify(r));
   r = await call('GET', '/api/github/oauth/start');
-  check('oauth start refused when unconfigured', r.status === 400 && /not configured/i.test(r.error || ''), JSON.stringify(r).slice(0, 180));
+  check('oauth start refused when unconfigured', r.status === 400 && r.code === 'OAUTH_APP_NOT_CONFIGURED', JSON.stringify(r).slice(0, 180));
 
   r = await call('POST', '/api/github/oauth/config', { clientId: TEST_CLIENT_ID, clientSecret: TEST_CLIENT_SECRET });
   check('oauth app config saved', r.ok === true && r.configured === true, JSON.stringify(r));
