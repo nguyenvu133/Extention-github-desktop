@@ -1,6 +1,47 @@
-<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="popup.css"><title>PixiJS Sync</title></head><body>
-<header><div class="logo">P</div><div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC</small></div><span id="lamp" class="lamp"></span></header>
-<section class="status"><div><small>LOCAL GIT BRIDGE</small><strong id="connection">Checking…</strong></div><button id="refresh" class="ghost">↻</button></section>
-<div class="repo"><small>CONNECTED REPOSITORY</small><b id="repoName">No repository selected</b><span id="branchName">—</span><p id="repoPath">Choose a local repository in Workspace.</p></div>
-<div class="grid"><button data-action="status">Git Status</button><button data-action="fetch">Fetch Origin</button><button data-action="pull">Pull</button><button data-action="push">Push</button></div>
-<button id="open" class="primary">OPEN FULL WORKSPACE ↗</button><footer><span id="version">Extension v1.0.0</span><span id="message">Ready</span></footer><script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="popup.css">
+<title>PixiJS Sync</title>
+</head>
+<body>
+<header>
+  <div class="logo">P</div>
+  <div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC</small></div>
+  <span id="lamp" class="lamp"></span>
+</header>
+
+<section class="status">
+  <div><small>LOCAL GIT BRIDGE</small><strong id="connection">Checking…</strong></div>
+  <button id="refresh" class="ghost" title="Re-check the bridge">&#8635;</button>
+</section>
+
+<div class="repo">
+  <small>CONNECTED REPOSITORY</small>
+  <b id="repoName">No repository selected</b>
+  <span id="branchName">—</span>
+  <p id="repoPath">Choose a local repository in Workspace.</p>
+</div>
+
+<div class="grid">
+  <button data-action="status">Git Status</button>
+  <button data-action="fetch">Fetch Origin</button>
+  <button data-action="pull">Pull</button>
+  <button data-action="push">Push</button>
+</div>
+
+<button id="open" class="primary">OPEN FULL WORKSPACE &#8599;</button>
+
+<details class="setup">
+  <summary>BRIDGE TOKEN</summary>
+  <label for="token">Paste the token printed by the bridge</label>
+  <input id="token" type="password" placeholder="48-character hex token" autocomplete="off" spellcheck="false">
+  <button id="saveToken" class="full">SAVE TOKEN</button>
+</details>
+
+<footer><span id="version">v—</span><span id="message">Ready</span></footer>
+<script src="popup.js"></script>
+</body>
+</html>

@@ -1,11 +1,22 @@
 {
   "manifest_version": 3,
   "name": "PixiJS GitHub Desktop Sync",
-  "version": "1.0.0",
-  "description": "Connect a PixiJS workspace to a local Git repository and GitHub Desktop through a secured local bridge.",
-  "permissions": ["storage", "tabs"],
-  "host_permissions": ["http://127.0.0.1:17321/*", "http://localhost:17321/*"],
-  "action": {"default_title": "PixiJS GitHub Desktop Sync", "default_popup": "popup.html"},
-  "background": {"service_worker": "background.js"},
-  "options_page": "dashboard.html"
+  "version": "1.0.1",
+  "description": "Run real Git operations on a local repository from Chrome through a secured local bridge.",
+  "permissions": ["storage", "tabs", "clipboardWrite"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "action": {
+    "default_title": "PixiJS GitHub Desktop Sync",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "dashboard.html",
+    "open_in_tab": true
+  }
 }

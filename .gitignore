@@ -1,0 +1,19 @@
+# Local bridge runtime state
+.bridge-token
+.bridge-state.json
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test scratch
+/tmp-test/
