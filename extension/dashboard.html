@@ -1,12 +1,106 @@
-<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PixiJS Engine × GitHub Desktop</title><link rel="stylesheet" href="dashboard.css"></head><body>
-<header><div class="brand"><div class="mark">P</div><div><b>PIXIJS ENGINE × GITHUB DESKTOP</b><small>LOCAL GAME DEVELOPMENT WORKSPACE</small></div></div><div class="connect"><i id="lamp"></i><span id="bridgeStatus">BRIDGE DISCONNECTED</span></div><nav><button id="fetch">Fetch Origin</button><button id="pull">Pull</button><button id="push" class="blue">Push</button></nav></header>
-<main><aside>
-<section class="panel"><h3>LOCAL BRIDGE</h3><label>Bridge URL</label><input id="bridgeUrl" value="http://127.0.0.1:17321"><label>Bridge token</label><input id="token" type="password" placeholder="Paste token printed by bridge"><button id="saveConnection" class="blue full">CONNECT BRIDGE</button><p class="hint">Bridge chỉ lắng nghe trên máy local. Token được lưu trong Chrome storage.</p></section>
-<section class="panel"><h3>REPOSITORY</h3><label>Local repository path</label><input id="repoPath" placeholder="C:\\Projects\\pixi-game-v8"><button id="connectRepo" class="full">CONNECT REPOSITORY</button><div class="meta"><small>REPOSITORY</small><b id="repoName">Not connected</b><small>BRANCH</small><b id="branch">—</b><small>REMOTE</small><b id="remote">—</b></div><select id="branchSelect"><option value="">Select branch</option></select><button id="switchBranch" class="full">CHECKOUT BRANCH</button></section>
-<section class="panel"><h3>COMMIT & SYNC</h3><label>Summary</label><input id="summary" placeholder="Update PixiJS game"><label>Description</label><textarea id="description" rows="3" placeholder="Optional details"></textarea><button id="commit" class="blue full">COMMIT STAGED FILES</button></section>
-<section class="panel"><h3>GITHUB DESKTOP</h3><p class="hint">Extension không điều khiển giao diện Desktop trực tiếp. Mở ứng dụng bằng giao thức github-desktop:// nếu hệ thống đã đăng ký; Git CLI xử lý thao tác repository.</p><button id="openDesktop" class="full">OPEN GITHUB DESKTOP</button></section>
-</aside><section class="content"><div class="panel"><div class="row"><h2>CHANGES / STAGING</h2><div><button id="refreshStatus">Refresh</button><button id="stageAll">Stage All</button></div></div><div id="changes" class="empty">Connect bridge and repository to load real Git status.</div></div>
-<div class="panel"><div class="row"><h2>DIFF VIEWER</h2><span id="diffFile" class="hint">Select a changed file</span></div><pre id="diff">No diff selected.</pre></div>
-<div class="panel"><div class="row"><h2>COMMIT HISTORY</h2><button id="loadHistory">Refresh History</button></div><div id="history" class="empty">No history loaded.</div></div>
-<div class="panel"><div class="row"><h2>WORKSPACE / PREVIEW</h2><span id="serverStatus" class="hint">Local preview not started</span></div><div class="preview"><div class="previewtop">PIXIJS WEB PREVIEW · local bridge server</div><div class="previewbody"><strong>PIXIJ​​S GAME WORKSPACE</strong><p>Start your project's local server from the bridge companion. This extension manages Git and connection status.</p></div></div></div>
-<div id="log" class="log">Ready. Connect the local bridge to begin.</div></section></main><script src="dashboard.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PixiJS Engine × GitHub Desktop</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="mark">P</div>
+    <div><b>PIXIJS ENGINE × GITHUB DESKTOP</b><small>LOCAL GAME DEVELOPMENT WORKSPACE</small></div>
+  </div>
+  <div class="connect"><i id="lamp"></i><span id="bridgeStatus">BRIDGE DISCONNECTED</span></div>
+  <nav>
+    <button id="fetch">Fetch Origin</button>
+    <button id="pull">Pull</button>
+    <button id="push" class="blue">Push</button>
+  </nav>
+</header>
+
+<main>
+<aside>
+
+  <section class="panel">
+    <h3>LOCAL BRIDGE</h3>
+    <label for="bridgeUrl">Bridge URL</label>
+    <input id="bridgeUrl" value="http://127.0.0.1:17321" spellcheck="false">
+    <label for="token">Bridge token</label>
+    <input id="token" type="password" placeholder="Paste the token printed by the bridge" autocomplete="off" spellcheck="false">
+    <button id="saveConnection" class="blue full">CONNECT BRIDGE</button>
+    <p class="hint">The bridge listens on your machine only. The token is stored in Chrome local storage.</p>
+  </section>
+
+  <section class="panel">
+    <h3>REPOSITORY</h3>
+    <label for="repoPath">Local repository path</label>
+    <input id="repoPath" placeholder="/Users/you/Projects/pixi-game" spellcheck="false">
+    <button id="connectRepo" class="full">CONNECT REPOSITORY</button>
+    <div class="meta">
+      <small>REPOSITORY</small><b id="repoName">Not connected</b>
+      <small>BRANCH</small><b id="branch">—</b>
+      <small>REMOTE</small><b id="remote">—</b>
+    </div>
+    <label for="branchSelect">Switch branch</label>
+    <select id="branchSelect"><option value="">Select branch</option></select>
+    <button id="switchBranch" class="full">CHECKOUT BRANCH</button>
+  </section>
+
+  <section class="panel">
+    <h3>COMMIT</h3>
+    <label for="summary">Summary</label>
+    <input id="summary" placeholder="Update PixiJS game">
+    <label for="description">Description</label>
+    <textarea id="description" rows="3" placeholder="Optional details"></textarea>
+    <button id="commit" class="blue full">COMMIT STAGED FILES</button>
+  </section>
+
+  <section class="panel">
+    <h3>GITHUB DESKTOP</h3>
+    <p class="hint">This extension does not drive the GitHub Desktop UI. It runs real Git commands through the local bridge. To open the same repository in GitHub Desktop, copy its path and use <b>File → Add local repository</b>.</p>
+    <button id="copyPath" class="full">COPY REPOSITORY PATH</button>
+  </section>
+
+</aside>
+
+<section class="content">
+
+  <div class="panel">
+    <div class="row">
+      <h2>CHANGES / STAGING</h2>
+      <div class="row-actions">
+        <button id="refreshStatus">Refresh</button>
+        <button id="stageAll">Stage All</button>
+        <button id="unstageAll">Unstage All</button>
+      </div>
+    </div>
+    <div id="changes" class="empty">Connect the bridge and a repository to load real Git status.</div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <h2>DIFF VIEWER</h2>
+      <span id="diffFile" class="hint">Select a changed file</span>
+    </div>
+    <pre id="diff">No diff selected.</pre>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <h2>COMMIT HISTORY</h2>
+      <button id="loadHistory">Refresh History</button>
+    </div>
+    <div id="history" class="empty">No history loaded.</div>
+  </div>
+
+  <div id="log" class="log">Ready. Connect the local bridge to begin.</div>
+
+</section>
+</main>
+
+<script src="dashboard.js"></script>
+</body>
+</html>
