@@ -1,5 +1,5 @@
 ﻿# PixiJS GitHub Desktop Sync - bridge launcher (Windows, PowerShell)
-# v3.1.0 - Phuong an 2 khi start-windows.bat bi SmartScreen hoac
+# v3.1.1 - Phuong an 2 khi start-windows.bat bi SmartScreen hoac
 # antivirus chan. Cach chay: chuot phai file -> Run with PowerShell,
 # hoac mo PowerShell roi go:
 #   powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
@@ -26,7 +26,7 @@ function Fail($msg) {
   exit 1
 }
 
-Write-Log '=== PixiJS GitHub Bridge v3.1.0 (PowerShell) ==='
+Write-Log '=== PixiJS GitHub Bridge v3.1.1 (PowerShell) ==='
 Write-Log "Thu muc bridge: $PSScriptRoot"
 Write-Log "Cong: $port"
 Write-Blank

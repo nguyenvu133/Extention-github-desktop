@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.1.0
+# PixiJS GitHub Desktop Sync — v3.1.1
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -479,6 +479,24 @@ trên máy bạn** (không cần đăng nhập GitHub).
 > shell nên không sợ injection từ tên file/branch. URL/branch/remote đều
 > được kiểm tra trước khi chạy.
 
+### Thanh công cụ Fetch / Pull / Push luôn hiện (v3.1.1)
+
+Ngay dưới header, ở **mọi tab**, có thanh giống GitHub Desktop:
+
+| Ô / nút | Làm gì |
+|---|---|
+| **Repository hiện tại** | Chọn repo local đã dùng gần đây, **＋ Thêm repo có sẵn trên máy…** (nhập đường dẫn) hoặc **＋ Clone repo từ GitHub…** |
+| **Branch hiện tại** | Đổi branch (checkout) |
+| **Fetch origin** | Lấy thông tin commit mới từ remote, không đổi file. Dòng nhỏ ghi "Fetch lần cuối …" |
+| **Pull origin** (số ↓) | Kéo commit mới về (merge + autostash mặc định). Có conflict thì tự mở tab Local Git |
+| **Push origin** (số ↑) | Đẩy commit lên. Branch mới chưa có trên remote thì nút đổi thành **Publish branch** (push `-u`) |
+
+Nút nên bấm tiếp theo được tô sáng (giống GitHub Desktop). Dòng trạng thái bên phải báo "Đang …", tiến trình, kết quả hoặc lỗi kèm gợi ý.
+
+**Chưa có repo trên máy?** Tab Repositories → bấm vào repo → **⇣ Clone / Mở bằng Git local**. Bridge clone về `~/GitHub/<tên-repo>` (tự tạo thư mục, dùng token GitHub đã đăng nhập cho repo private, không ghi token vào `.git/config`). Bấm lần sau sẽ mở luôn bản đã clone.
+
+Popup (bấm icon extension) cũng có Fetch Origin / Pull / Push với cùng mặc định.
+
 ### Pull / Push nâng cao (v3.1.0)
 
 **Pull**
@@ -890,6 +908,7 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.1.1 (2026-11-23)** — Thêm **thanh công cụ luôn hiện** (Repository / Branch / Fetch origin / Pull origin / Push origin / Publish branch) — trước đây nút Fetch/Pull/Push nằm sâu trong tab Local Git nên khó thấy. Nút **Clone / Mở bằng Git local** trong trang repo. Sửa bridge: Fetch và Clone giờ dùng token GitHub đã đăng nhập (repo private trước đây lỗi xác thực), Fetch từng remote riêng, báo lỗi rõ khi chưa có remote, Clone tự tạo thư mục cha; API mới `/api/repo/recent`, `/api/repo/find`. Sửa popup: kết quả Fetch/Pull/Push không còn bị "Token accepted" ghi đè; Pull dùng autostash, Push tự publish branch mới. Test: 10 suite qua trên Node 16.13.0 và 20; test end-to-end bằng Chromium thật `tests/e2e-toolbar.js` 49/49.
 - **v3.1.0 (2026-11-23)** — Mở rộng pull/push (xem trước, pull tất cả branch, hoàn tác pull, rebase giữ merge commit, squash/no-commit, strategy option, push nhiều remote, dry-run, atomic, follow-tags, push option, force-with-lease + force-if-includes, porcelain), dùng token GitHub cho remote HTTPS, tiến trình SSE, lịch sử pull/push, thanh Continue/Skip/Abort khi rebase dở. **Hạ yêu cầu Node.js xuống 16.13.0**: bỏ `fetch`/`Readable.fromWeb`/`AbortSignal.timeout`, thay bằng `http`/`https` có sẵn. Sửa lỗi `start-windows.bat` đọc nhầm số phiên bản Node (Node 22.11 bị coi là quá cũ). Test: 9 suite đều qua trên Node 16.13.0 và Node 20 (suite mới `bridge-v310-test.js`: 55/55).
 - **v3.0.2 (2026-11-23)** — Sửa triệt để lỗi không mở được
   `start-windows.bat` (đúp chuột không chạy / cửa sổ nháy rồi tắt):

@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.1.0
+ * v3.1.1
  *
  * A dependency-free local bridge (Node >= 16.13, only built-in modules) that
  * exposes two things to the companion Chrome extension:
@@ -106,7 +106,7 @@ const https = require('https');
 })();
 const { URL } = require('url');
 
-const VERSION = '3.1.0';
+const VERSION = '3.1.1';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -293,6 +293,8 @@ function tokenMatches(header) {
 /* ------------------------------------------------------------------ */
 
 let repoPath = null;
+let recentRepos = []; // v3.1.1: [{ path, name, remote, at }] newest first (max 20)
+let lastFetchAt = null; // v3.1.1: ISO time of the last successful fetch
 
 function loadState() {
   try {
@@ -302,13 +304,18 @@ function loadState() {
       const abs = path.resolve(raw.repoPath);
       if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) repoPath = abs;
     }
+    if (raw && Array.isArray(raw.recentRepos)) {
+      recentRepos = raw.recentRepos
+        .filter((r) => r && typeof r.path === 'string' && r.path)
+        .slice(0, 20);
+    }
   } catch (_) {}
 }
 
 function saveState() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ repoPath }, null, 2), { mode: 0o600 });
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ repoPath, recentRepos }, null, 2), { mode: 0o600 });
   } catch (_) {}
 }
 
@@ -1392,7 +1399,11 @@ function githubHosts() {
  */
 async function githubAuthFor(remote, enabled) {
   if (enabled === false || !ghConfig.token) return { args: [], env: {}, used: false };
-  const url = await rawRemoteUrl(remote);
+  return githubAuthForUrl(await rawRemoteUrl(remote), enabled);
+}
+
+function githubAuthForUrl(url, enabled) {
+  if (enabled === false || !ghConfig.token) return { args: [], env: {}, used: false };
   if (!url || !/^https:\/\//i.test(url)) return { args: [], env: {}, used: false };
   let host = '';
   try { host = new URL(url).host; } catch (_) { return { args: [], env: {}, used: false }; }
@@ -2050,6 +2061,27 @@ async function remoteUrl() {
   } catch (_) {
     return null;
   }
+}
+
+/** v3.1.1: remember the selected repo so the toolbar can switch back. */
+async function rememberRepo() {
+  if (!repoPath) return;
+  let remote = null;
+  try { remote = await rawRemoteUrl('origin'); } catch (_) {}
+  if (!remote) { try { remote = await remoteUrl(); } catch (_) {} }
+  const entry = { path: repoPath, name: path.basename(repoPath), remote: remote ? redactUrl(remote) : null, at: new Date().toISOString() };
+  recentRepos = [entry].concat(recentRepos.filter((r) => path.resolve(r.path) !== repoPath)).slice(0, 20);
+  saveState();
+}
+
+function redactUrl(url) {
+  return String(url || '').replace(/^(https?:\/\/)[^@/]+@/i, '$1');
+}
+
+/** "owner/repo" for a github remote URL (https or ssh), else null. */
+function githubFullName(url) {
+  const m = String(url || '').match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
 async function repoSummary() {
@@ -3003,7 +3035,26 @@ async function handle(req, res) {
       throw new Error(`Not a Git repository: ${candidate}`);
     }
     saveState();
+    await rememberRepo();
     return send(req, res, 200, { ok: true, repository: await repoSummary() });
+  }
+
+  /* v3.1.1: recently used local repos (for the toolbar switcher) and a
+   * lookup "is owner/repo already cloned on this machine?". */
+  if (route === '/api/repo/recent' && req.method === 'GET') {
+    if (repoPath && !recentRepos.some((r) => path.resolve(r.path) === repoPath)) await rememberRepo();
+    const list = recentRepos
+      .filter((r) => { try { return fs.statSync(r.path).isDirectory(); } catch (_) { return false; } })
+      .map((r) => Object.assign({}, r, { fullName: githubFullName(r.remote), current: !!repoPath && path.resolve(r.path) === repoPath }));
+    return send(req, res, 200, { ok: true, repos: list, defaultCloneDir: path.join(os.homedir(), 'GitHub') });
+  }
+
+  if (route === '/api/repo/find' && req.method === 'GET') {
+    const want = String(url.searchParams.get('fullName') || '').trim().toLowerCase();
+    if (!/^[^/\s]+\/[^/\s]+$/.test(want)) throw new Error('fullName must look like owner/repo');
+    const hit = recentRepos.find((r) => githubFullName(r.remote) === want && (() => { try { return fs.statSync(r.path).isDirectory(); } catch (_) { return false; } })());
+    const name = want.split('/')[1];
+    return send(req, res, 200, { ok: true, found: !!hit, path: hit ? hit.path : null, suggestedPath: path.join(os.homedir(), 'GitHub', name) });
   }
 
   if (route === '/api/repo/current' && req.method === 'GET') {
@@ -3020,8 +3071,14 @@ async function handle(req, res) {
     if (!targetInput) throw new Error('Destination path is required');
     const target = path.resolve(expandHome(targetInput));
     const parent = path.dirname(target);
-    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
-      throw new Error(`Parent directory does not exist: ${parent}`);
+    // v3.1.1: create the parent folder (e.g. ~/GitHub) when it is missing.
+    if (!fs.existsSync(parent)) {
+      try { fs.mkdirSync(parent, { recursive: true }); } catch (e) {
+        throw new Error(`Could not create parent directory ${parent}: ${e.message}`);
+      }
+    }
+    if (!fs.statSync(parent).isDirectory()) {
+      throw new Error(`Parent path is not a directory: ${parent}`);
     }
     if (fs.existsSync(target)) {
       const entries = fs.readdirSync(target);
@@ -3030,15 +3087,27 @@ async function handle(req, res) {
     const branch = body.branch ? validateBranchName(body.branch) : null;
     const args = ['clone'];
     if (branch) args.push('-b', branch);
-    args.push(gitUrl, target);
-    const result = await runGitIn(parent, args, { timeout: GIT_TIMEOUT_MS });
+    args.push('--progress', gitUrl, target);
+    // v3.1.1: private GitHub repos need the signed-in token. Passed as
+    // `git -c ... clone` (before the subcommand) so it is NOT persisted
+    // into the new repo's .git/config.
+    const auth = githubAuthForUrl(gitUrl, body.useGithubAuth !== false);
+    let result;
+    try {
+      result = await runGitIn(parent, auth.args.concat(args), { timeout: GIT_TIMEOUT_MS, env: auth.env, onStderr: progressReporter('clone') });
+    } catch (err) {
+      recordHistory({ op: 'clone', ok: false, remote: redactUrl(gitUrl), error: cleanGitOutput(err.message).slice(0, 300) });
+      throw failWithDetails(err, { usedGithubAuth: auth.used });
+    }
     repoPath = target;
     try {
       const topLevel = (await runGit(['rev-parse', '--show-toplevel'])).trim();
       if (topLevel) repoPath = path.resolve(topLevel);
     } catch (_) {}
     saveState();
-    log(`Cloned ${gitUrl} into ${repoPath}`);
+    await rememberRepo();
+    recordHistory({ op: 'clone', ok: true, remote: redactUrl(gitUrl), path: repoPath });
+    log(`Cloned ${redactUrl(gitUrl)} into ${repoPath}`);
     return send(req, res, 200, { ok: true, result: (result || '').trim(), repository: await repoSummary() });
   }
 
@@ -3119,7 +3188,46 @@ async function handle(req, res) {
 
   /* ---- remote sync (v2.1: pull/push/sync expanded) ---- */
   if (route === '/api/git/fetch' && req.method === 'POST') {
-    return send(req, res, 200, { ok: true, result: (await runGit(['fetch', '--all', '--prune'])).trim() });
+    // v3.1.1: fetch each remote separately so the signed-in GitHub token
+    // is only offered to https://github.com remotes (private repos used
+    // to fail with "could not read Username").
+    const remotesOut = (await runGit(['remote'])).split('\n').map((r) => r.trim()).filter(Boolean);
+    if (!remotesOut.length) {
+      const e = new Error('Repo chưa có remote nào — thêm remote (ví dụ origin) trong panel Remotes trước khi Fetch.');
+      e.code = 'NO_REMOTE';
+      throw e;
+    }
+    let targets = remotesOut;
+    if (body.remote) {
+      const want = validateRemoteName(body.remote);
+      if (!remotesOut.includes(want)) throw new Error(`No such remote: ${want}`);
+      targets = [want];
+    }
+    const results = [];
+    for (const remote of targets) {
+      const auth = await githubAuthFor(remote, body.useGithubAuth !== false);
+      const args = auth.args.concat(['fetch', '--progress', remote]);
+      if (body.prune !== false) args.push('--prune');
+      if (body.tags) args.push('--tags');
+      try {
+        const out = await runGitIn(repoPath, args, { env: auth.env, onStderr: progressReporter('fetch') });
+        results.push({ remote, ok: true, output: cleanGitOutput(out), usedGithubAuth: auth.used });
+      } catch (err) {
+        const cls = classifyGitFailure(`${err.message}\n${err.gitStderr || ''}`);
+        results.push({ remote, ok: false, error: cleanGitOutput(err.message), reason: cls.reason, hint: cls.hint, usedGithubAuth: auth.used });
+      }
+    }
+    const ok = results.every((r) => r.ok);
+    if (results.some((r) => r.ok)) lastFetchAt = new Date().toISOString();
+    recordHistory({ op: 'fetch', ok, remote: targets.join(','), error: ok ? undefined : results.filter((r) => !r.ok).map((r) => `${r.remote}: ${r.error}`).join('; ').slice(0, 300) });
+    if (!ok && !results.some((r) => r.ok)) {
+      const first = results[0];
+      const e = new Error(first.error + (first.hint ? `\n→ ${first.hint}` : ''));
+      e.code = 'GIT_' + String(first.reason || 'unknown').toUpperCase().replace(/-/g, '_');
+      e.details = { reason: first.reason, hint: first.hint, results };
+      throw e;
+    }
+    return send(req, res, 200, { ok, results, lastFetchAt, result: results.map((r) => r.ok ? r.output : r.error).filter(Boolean).join('\n'), ...(await aheadBehind()) });
   }
 
   if (route === '/api/git/pull' && req.method === 'POST') {
@@ -3259,7 +3367,7 @@ async function handle(req, res) {
 
   // How many commits ahead of / behind the upstream branch.
   if (route === '/api/git/ahead-behind' && req.method === 'GET') {
-    return send(req, res, 200, { ok: true, ...(await aheadBehind()) });
+    return send(req, res, 200, { ok: true, lastFetchAt, ...(await aheadBehind()) });
   }
 
   /* ---- branches (v2.1: local + remote, create/rename/delete) ---- */

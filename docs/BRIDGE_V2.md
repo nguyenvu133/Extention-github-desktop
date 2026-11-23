@@ -979,3 +979,24 @@ sót sau khi chạy.
 - `tests/bridge-v310-test.js`: 55/55 trên Node 16.13.0.
 - `node tests/run-all.js` (9 suite): ALL SUITES PASSED trên Node 16.13.0 và Node 20.
 - Chưa kiểm chứng: `.bat`/`.ps1` trên Windows thật; push/pull tới GitHub thật bằng token.
+
+---
+
+## 10. v3.1.1 — Thanh công cụ Fetch / Pull / Push luôn hiện
+
+**Vấn đề user báo:** "Không thấy nút fetch origin pull push". Nguyên nhân: nút có nhưng nằm trong tab Local Git (ẩn mặc định), khung thứ 4 từ trên xuống.
+
+**Sửa:**
+- Dashboard: thanh `#desktopBar` dưới header, hiện ở mọi tab — Repository hiện tại (chọn / thêm / clone), Branch hiện tại (checkout), Fetch origin (thời điểm fetch cuối), Pull origin (số commit ↓), Push origin (số ↑) / Publish branch. Nút nên bấm được tô sáng. Khung Push/Pull/Sync chuyển lên đầu tab Local Git.
+- Trang repo: nút "Clone / Mở bằng Git local" (`/api/repo/find` → mở bản có sẵn, hoặc clone về `~/GitHub/<repo>`).
+- Bridge:
+  - `POST /api/git/fetch` fetch từng remote, token GitHub chỉ cho remote `https://github.com`, trả `results[]`, `lastFetchAt`, ahead/behind; `NO_REMOTE` khi repo chưa có remote.
+  - `POST /api/git/clone` dùng token (truyền `git -c … clone`, không lưu vào config), tự tạo thư mục cha, ghi lịch sử.
+  - `GET /api/repo/recent`, `GET /api/repo/find?fullName=owner/repo`; `recentRepos` lưu trong state file.
+- Popup: kết quả thao tác giữ 20 giây (trước bị "Token accepted" ghi đè ngay), Pull autostash, Push tự `--set-upstream` cho branch mới.
+
+**Kiểm thử:**
+- `tests/bridge-v311-test.js`: 27/27.
+- `tests/e2e-toolbar.js` (Chromium thật + extension + bridge + remote thật + clone repo public từ github.com): 49/49 trên Node 16.13.0 và Node 20.
+- `node tests/run-all.js`: 10 suite, ALL SUITES PASSED trên Node 16.13.0 và 20.
+- Các lỗi tìm ra trong lúc chạy e2e và đã sửa: dòng trạng thái bị dòng tiến trình ghi đè (mất "Đang …"); popup bị ghi đè kết quả; `new Option` không chạy trong DOM giả lập của test cũ.

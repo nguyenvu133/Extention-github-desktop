@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — bridge-client v3.1.0
+ * PixiJS GitHub Desktop Sync — bridge-client v3.1.1
  *
  * Shared by popup.js and dashboard.js (loaded BEFORE them in
  * popup.html / dashboard.html). Every network call to the bridge goes

@@ -11,7 +11,7 @@
 <header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.1</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.1.1</small></div>
   </div>
 
   <div class="gh-search">
@@ -48,6 +48,31 @@
     <button id="logoutBtn" class="mini" title="Sign out of GitHub">Sign out</button>
   </div>
 </header>
+
+<!-- v3.1.1: GitHub-Desktop style toolbar — always visible on every tab,
+     so Fetch origin / Pull / Push are never hidden behind a tab. -->
+<div id="desktopBar" class="desktop-bar">
+  <div class="db-cell">
+    <small>REPOSITORY HIỆN TẠI</small>
+    <select id="dbRepoSelect" title="Chọn repo local (đã dùng gần đây), thêm repo hoặc clone">
+      <option value="">— Chưa chọn repo —</option>
+    </select>
+  </div>
+  <div class="db-cell">
+    <small>BRANCH HIỆN TẠI</small>
+    <select id="dbBranchSelect" title="Đổi branch (checkout)"><option value="">—</option></select>
+  </div>
+  <button id="dbFetchBtn" class="db-btn" title="git fetch — lấy thông tin commit mới từ remote, KHÔNG đổi file trên máy">
+    <span class="db-icon">⟳</span><span class="db-text"><b id="dbFetchText">Fetch origin</b><small id="dbFetchSub">Chưa fetch</small></span>
+  </button>
+  <button id="dbPullBtn" class="db-btn" title="git pull — kéo commit mới từ remote về máy">
+    <span class="db-icon">↓</span><span class="db-text"><b><span id="dbPullText">Pull origin</span> <span id="dbBehind" class="db-count"></span></b><small id="dbPullSub">Kéo commit về</small></span>
+  </button>
+  <button id="dbPushBtn" class="db-btn" title="git push — đẩy commit local lên remote">
+    <span class="db-icon">↑</span><span class="db-text"><b><span id="dbPushText">Push origin</span> <span id="dbAhead" class="db-count"></span></b><small id="dbPushSub">Đẩy commit lên</small></span>
+  </button>
+  <div id="dbStatus" class="db-status">Bridge chưa kết nối.</div>
+</div>
 
 <main>
 <aside>
@@ -259,7 +284,8 @@
         </div>
       </div>
       <div class="row-actions repo-actions">
-        <button id="repoZipBtn" class="blue">⬇ Tải .zip</button>
+        <button id="repoLocalBtn" class="blue" title="Clone repo này về máy (hoặc mở bản đã clone) để dùng Fetch / Pull / Push">⇣ Clone / Mở bằng Git local</button>
+        <button id="repoZipBtn">⬇ Tải .zip</button>
         <button id="repoStarBtn">★ Star</button>
         <button id="repoUnstarBtn">☆ Unstar</button>
         <button id="repoForkBtn">⑂ Fork</button>
@@ -448,40 +474,6 @@
   <div id="view-local" class="view hidden">
     <div class="panel">
       <div class="row">
-        <h2>CHANGES / STAGING</h2>
-        <div class="row-actions">
-          <button id="refreshStatus">Refresh</button>
-          <button id="stageAll">Stage All</button>
-          <button id="unstageAll">Unstage All</button>
-        </div>
-      </div>
-      <div id="changes" class="empty">Connect the bridge and a repository to load real Git status.</div>
-    </div>
-
-    <div class="panel">
-      <div class="row">
-        <h2>DIFF VIEWER</h2>
-        <span id="diffFile" class="hint">Select a changed file</span>
-      </div>
-      <div id="diffSummary" class="hint">No diff summary loaded.</div>
-      <pre id="diff">No diff selected.</pre>
-    </div>
-
-    <div class="panel">
-      <div class="row">
-        <h2>COMMIT HISTORY</h2>
-        <div class="row-actions">
-          <button id="historyPrevBtn" class="mini">← Prev</button>
-          <span id="historyPageLabel" class="hint">Page 1</span>
-          <button id="historyNextBtn" class="mini">Next →</button>
-          <button id="loadHistory">Refresh History</button>
-        </div>
-      </div>
-      <div id="history" class="empty">No history loaded.</div>
-    </div>
-
-    <div class="panel">
-      <div class="row">
         <h2>PUSH / PULL / SYNC</h2>
         <span id="aheadBehindBadge" class="badge">—</span>
       </div>
@@ -578,6 +570,40 @@
       <div id="syncSteps" class="hint">Sync runs fetch → pull → push and reports each step here.</div>
       <div id="pullPushResult" class="pp-result hidden"></div>
       <p class="hint">If a pull or merge conflicts, resolve it in the Merge &amp; Conflicts panel below. Khi rebase, nút <b>Ours</b> vẫn luôn là <b>bản của bạn</b>.</p>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>CHANGES / STAGING</h2>
+        <div class="row-actions">
+          <button id="refreshStatus">Refresh</button>
+          <button id="stageAll">Stage All</button>
+          <button id="unstageAll">Unstage All</button>
+        </div>
+      </div>
+      <div id="changes" class="empty">Connect the bridge and a repository to load real Git status.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>DIFF VIEWER</h2>
+        <span id="diffFile" class="hint">Select a changed file</span>
+      </div>
+      <div id="diffSummary" class="hint">No diff summary loaded.</div>
+      <pre id="diff">No diff selected.</pre>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>COMMIT HISTORY</h2>
+        <div class="row-actions">
+          <button id="historyPrevBtn" class="mini">← Prev</button>
+          <span id="historyPageLabel" class="hint">Page 1</span>
+          <button id="historyNextBtn" class="mini">Next →</button>
+          <button id="loadHistory">Refresh History</button>
+        </div>
+      </div>
+      <div id="history" class="empty">No history loaded.</div>
     </div>
 
     <div class="panel">

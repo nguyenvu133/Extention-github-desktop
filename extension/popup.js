@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v3.1.0
+ * PixiJS GitHub Desktop Sync — popup v3.1.1
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
  * signed-in GitHub account (with its sign-in method and email), the
@@ -31,6 +31,7 @@ const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEna
 
 let bridgeState = 'checking'; // 'connected' | 'reconnecting' | 'disconnected'
 let pollTimer = null;
+let keepMessageUntil = 0; // v3.1.1: hold Fetch/Pull/Push results on screen for a while
 
 function normalizeBase(url) {
   return String(url || '').trim().replace(/\/+$/, '') || DEFAULTS.bridgeUrl;
@@ -239,7 +240,8 @@ async function refresh() {
     }
     try {
       await api('/api/repo/current');
-      $('message').textContent = 'Token accepted';
+      // v3.1.1: do not wipe the result of a Fetch/Pull/Push click.
+      if (Date.now() > keepMessageUntil) $('message').textContent = 'Token accepted';
     } catch (err) {
       setLamp('warn');
       $('message').textContent = 'Token rejected — paste the current bridge token';
@@ -336,18 +338,44 @@ $('downloadZipBtn').onclick = async () => {
   }
 };
 
+
 document.querySelectorAll('[data-action]').forEach((button) => {
   button.onclick = async () => {
     const action = button.dataset.action;
     const method = action === 'status' ? 'GET' : 'POST';
     try {
-      const data = await api('/api/git/' + action, method, method === 'POST' ? {} : undefined);
+      // v3.1.1: same defaults as the dashboard toolbar — pull/sync use
+      // autostash; push publishes a branch that has no upstream yet.
+      let body;
+      if (method === 'POST') {
+        body = {};
+        if (action === 'pull' || action === 'sync') body.autostash = true;
+        if (action === 'push') {
+          const ab = await api('/api/git/ahead-behind').catch(() => null);
+          if (ab && ab.hasUpstream === false) body.setUpstream = true;
+        }
+      }
+      button.disabled = true;
+      $('message').textContent = button.textContent + '…';
+      let data;
+      try {
+        data = await api('/api/git/' + action, method, body);
+      } finally {
+        button.disabled = false;
+      }
       if (action === 'status') {
         const count = (data.files || []).length;
         $('message').textContent = count + ' changed file(s)';
+      } else if (data && data.conflict) {
+        $('message').textContent = 'Có conflict — mở OPEN FULL WORKSPACE → Local Git để xử lý.';
+      } else if (action === 'pull') {
+        $('message').textContent = data.commitsPulled ? `Pull ✓ — nhận ${data.commitsPulled} commit` : 'Pull ✓ — đã mới nhất';
+      } else if (action === 'fetch') {
+        $('message').textContent = `Fetch ✓ — ↓${Number(data.behind) || 0} ↑${Number(data.ahead) || 0}`;
       } else {
         $('message').textContent = button.textContent + ' ✓';
       }
+      keepMessageUntil = Date.now() + 20000;
       await refresh();
     } catch (err) {
       showError(err);

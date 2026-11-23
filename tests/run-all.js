@@ -31,7 +31,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v3.1.0 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v3.1.1 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -71,6 +71,7 @@ async function main() {
     ['bridge-v301-test.js', 'Bridge v3.0.1 (Failed to fetch fix: bridge-client, CORS, connection-test, login gate, start scripts)'],
     ['bridge-v302-test.js', 'Bridge v3.0.2 (start-windows.bat CRLF/ASCII fix + .ps1 + doctor + launcher waits for /health)'],
     ['bridge-v310-test.js', 'Bridge v3.1.0 (extended pull/push: preview, autostash, undo, rebase flow, all branches, refspecs, multi-remote, history, GitHub token, Node 16.13)'],
+    ['bridge-v311-test.js', 'Bridge v3.1.1 (toolbar routes: recent/find repo, per-remote fetch + GitHub token, clone into ~/GitHub, publish branch)'],
     ['extension-test.js', 'Extension functional (local Git against the live bridge)'],
   ];
   let failed = 0;

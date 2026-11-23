@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.1.0
+ * PixiJS GitHub Desktop Sync — dashboard v3.1.1
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
@@ -239,6 +239,7 @@ async function health() {
       }
     }
     if (data.autoUpdate) showAutoUpdate(data.autoUpdate);
+    dbOnHealth(data);
     if (wasDown) {
       log('Bridge is back. Reconnected.');
       startEventStream();
@@ -258,6 +259,7 @@ async function health() {
       setBridgeState('disconnected', BRIDGE_START_SHORT);
     }
     localConnected = false;
+    dbOnOffline();
     stopEventStream();
     return false;
   }
@@ -1757,6 +1759,7 @@ async function branches() {
   select.innerHTML = '';
 
   const list = data.branches || [];
+  dbFillBranches(list);
   if (!list.length) {
     const option = document.createElement('option');
     option.value = '';
@@ -1875,7 +1878,7 @@ function pushOptions(extra) {
     branch: t.branch,
     remoteBranch: $('pushRemoteBranch').value.trim() || null,
     upTo: $('pushUpTo').value.trim() || null,
-    setUpstream: !!$('setUpstreamCheck').checked,
+    setUpstream: !!$('setUpstreamCheck').checked || !!(extra && extra.setUpstream),
     force,
     confirm: force, // only ever sent when the user ticked both checkboxes
     forceIfIncludes: force && !!$('forceIfIncludesCheck').checked,
@@ -1895,6 +1898,7 @@ function pushOptions(extra) {
 
 async function loadAheadBehind() {
   const data = await api('/api/git/ahead-behind');
+  dbSetAheadBehind(data);
   const badge = $('aheadBehindBadge');
   if (!data.hasUpstream) {
     badge.textContent = 'No upstream';
@@ -1910,6 +1914,7 @@ async function loadAheadBehind() {
 
 function showAheadBehind(data) {
   if (!data) return;
+  dbSetAheadBehind(data);
   const badge = $('aheadBehindBadge');
   const ahead = Number(data.ahead) || 0;
   const behind = Number(data.behind) || 0;
@@ -2017,9 +2022,24 @@ async function handlePossibleConflict(res, what) {
 }
 
 async function doFetch() {
-  await api('/api/git/fetch', 'POST', {});
+  let res;
+  try {
+    res = await api('/api/git/fetch', 'POST', { useGithubAuth: !!$('useGithubAuthCheck').checked });
+  } catch (err) {
+    const d = err.data || {};
+    showResult((box) => {
+      box.append(mk('h4', 'bad', '✗ Fetch thất bại' + (d.reason && d.reason !== 'unknown' ? ` (${d.reason})` : '')));
+      if (d.hint) box.append(mk('div', 'warn', d.hint));
+    });
+    throw err;
+  }
+  dbState.lastFetchAt = res.lastFetchAt || new Date().toISOString();
+  showAheadBehind(res);
+  const failed = (res.results || []).filter((r) => !r.ok);
+  if (failed.length) log('Fetch: một số remote lỗi — ' + failed.map((r) => `${r.remote}: ${r.hint || r.error}`).join('; '));
   await loadAheadBehind().catch(() => {});
   await status();
+  return res;
 }
 
 async function afterRemoteOp(res) {
@@ -2208,6 +2228,7 @@ async function loadSyncHistory() {
 
 let progressHideTimer = null;
 function showGitProgress(payload) {
+  if (dbState.busy) dbSetStatus(`${dbState.busyText || 'Đang chạy…'}\n${payload.op || 'git'}: ${payload.line || ''}`, 'busy');
   const line = $('gitProgress');
   line.textContent = `${payload.op || 'git'}: ${payload.line || ''}`;
   line.classList.remove('hidden');
@@ -3056,6 +3077,314 @@ $('copyPath').onclick = () => run('Repository path copied', async () => {
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
+
+
+/* ------------------------------------------------------------------ */
+/* v3.1.1 — GitHub-Desktop toolbar: Repository / Branch / Fetch origin  */
+/* / Pull origin / Push origin, visible on every tab.                  */
+/* ------------------------------------------------------------------ */
+
+const dbState = { bridge: false, repoPath: null, ab: null, lastFetchAt: null, busy: false, busyText: '', branchList: [] };
+
+function dbRemote() {
+  return ($('syncRemote') && $('syncRemote').value.trim()) || 'origin';
+}
+
+function dbSetStatus(text, cls) {
+  const el = $('dbStatus');
+  el.textContent = text;
+  el.className = 'db-status' + (cls ? ' ' + cls : '');
+  el.dataset.state = cls || 'info';
+}
+
+function viAgo(iso) {
+  if (!iso) return null;
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (!Number.isFinite(sec)) return null;
+  if (sec < 60) return 'vừa xong';
+  if (sec < 3600) return Math.floor(sec / 60) + ' phút trước';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' giờ trước';
+  return Math.floor(sec / 86400) + ' ngày trước';
+}
+
+function dbNeedsPublish() {
+  const ab = dbState.ab;
+  return !!(dbState.repoPath && ab && ab.hasUpstream === false && ab.branch && !String(ab.branch).startsWith('('));
+}
+
+function dbRender() {
+  const remote = dbRemote();
+  const ab = dbState.ab || {};
+  const behind = Number(ab.behind) || 0;
+  const ahead = Number(ab.ahead) || 0;
+  const publish = dbNeedsPublish();
+  for (const id of ['dbFetchBtn', 'dbPullBtn', 'dbPushBtn']) {
+    $(id).disabled = !dbState.bridge || dbState.busy;
+    $(id).classList.remove('suggest');
+  }
+  $('dbRepoSelect').disabled = !dbState.bridge || dbState.busy;
+  $('dbBranchSelect').disabled = !dbState.bridge || dbState.busy || !dbState.repoPath;
+  $('dbFetchText').textContent = 'Fetch ' + remote;
+  $('dbPullText').textContent = 'Pull ' + remote;
+  $('dbPushText').textContent = publish ? 'Publish branch' : 'Push ' + remote;
+  $('dbBehind').textContent = behind > 0 ? String(behind) : '';
+  $('dbAhead').textContent = ahead > 0 ? String(ahead) : '';
+  const ago = viAgo(dbState.lastFetchAt);
+  $('dbFetchSub').textContent = ago ? 'Fetch lần cuối ' + ago : 'Chưa fetch lần nào';
+  $('dbPullSub').textContent = behind > 0 ? `${behind} commit mới trên remote` : 'Kéo commit mới về';
+  $('dbPushSub').textContent = publish ? 'Đưa branch này lên remote' : (ahead > 0 ? `${ahead} commit chưa đẩy lên` : 'Đẩy commit lên remote');
+  if (!dbState.bridge || !dbState.repoPath) return;
+  if (behind > 0) $('dbPullBtn').classList.add('suggest');
+  else if (ahead > 0 || publish) $('dbPushBtn').classList.add('suggest');
+  else $('dbFetchBtn').classList.add('suggest');
+}
+
+function dbSetAheadBehind(data) {
+  if (!data) return;
+  dbState.ab = data;
+  if (data.lastFetchAt) dbState.lastFetchAt = data.lastFetchAt;
+  dbRender();
+}
+
+function dbOpt(text, value) {
+  const o = document.createElement('option');
+  o.value = value;
+  o.textContent = text;
+  return o;
+}
+
+function dbFillBranches(list) {
+  dbState.branchList = list || [];
+  const sel = $('dbBranchSelect');
+  sel.textContent = '';
+  if (!dbState.branchList.length) {
+    sel.append(dbOpt('(chưa có branch)', ''));
+    return;
+  }
+  let current = '';
+  for (const b of dbState.branchList) {
+    sel.append(dbOpt(b.name, b.name));
+    if (b.current) current = b.name;
+  }
+  if (current) sel.value = current;
+}
+
+async function dbLoadRecent() {
+  const sel = $('dbRepoSelect');
+  let data = { repos: [] };
+  try { data = await api('/api/repo/recent'); } catch (_) { /* older bridge */ }
+  sel.textContent = '';
+  const repos = data.repos || [];
+  if (!dbState.repoPath) sel.append(dbOpt('— Chưa chọn repo —', ''));
+  for (const r of repos) sel.append(dbOpt(`${r.name}  (${r.path})`, r.path));
+  if (dbState.repoPath && !repos.some((r) => r.path === dbState.repoPath)) sel.append(dbOpt(dbState.repoPath, dbState.repoPath));
+  sel.append(dbOpt('＋ Thêm repo có sẵn trên máy…', '__add'));
+  sel.append(dbOpt('＋ Clone repo từ GitHub…', '__clone'));
+  sel.value = dbState.repoPath || '';
+}
+
+function dbOnHealth(data) {
+  const wasBridge = dbState.bridge;
+  dbState.bridge = true;
+  const repo = data && data.repository;
+  const newPath = repo ? repo.path : null;
+  const changed = newPath !== dbState.repoPath;
+  dbState.repoPath = newPath;
+  if (!newPath) {
+    dbState.ab = null;
+    dbFillBranches([]);
+    if (!dbState.busy) dbSetStatus('Chưa chọn repo local. Chọn ở ô "Repository hiện tại", hoặc mở một repo trong tab Repositories rồi bấm "Clone / Mở bằng Git local".');
+  } else if (repo && repo.branch && !dbState.branchList.length) {
+    dbFillBranches([{ name: repo.branch, current: true }]);
+  }
+  if (changed || !wasBridge) {
+    dbLoadRecent().catch(() => {});
+    if (newPath) {
+      loadAheadBehind().catch(() => {});
+      if (!dbState.busy) dbSetStatus(`Repo: ${newPath}`);
+    }
+  }
+  dbRender();
+}
+
+function dbOnOffline() {
+  dbState.bridge = false;
+  dbRender();
+  dbSetStatus('Bridge chưa kết nối — chạy bridge (start-windows.bat / start-mac-linux.sh) rồi dán token.', 'bad');
+}
+
+async function dbRun(btnId, busyText, fn) {
+  if (!dbState.bridge) { dbSetStatus('Bridge chưa kết nối — chạy bridge trước.', 'bad'); return; }
+  if (!dbState.repoPath) {
+    dbSetStatus('Chưa chọn repo local nên chưa Fetch/Pull/Push được. Chọn repo ở ô "Repository hiện tại" (hoặc "＋ Clone repo từ GitHub…").', 'bad');
+    if (typeof $('dbRepoSelect').focus === 'function') $('dbRepoSelect').focus();
+    return;
+  }
+  dbState.busy = true;
+  const btn = btnId ? $(btnId) : null;
+  if (btn) btn.classList.add('busy');
+  dbState.busyText = busyText;
+  dbRender();
+  dbSetStatus(busyText, 'busy');
+  try {
+    const msg = await fn();
+    dbSetStatus(msg || 'Xong.', 'ok');
+    log(msg || 'Xong.');
+  } catch (err) {
+    const d = err.data || {};
+    const text = String(err.message || err).split('\n→')[0];
+    dbSetStatus('✗ ' + text + (d.hint ? '\n→ ' + d.hint : ''), 'bad');
+    log('ERROR: ' + text);
+  } finally {
+    dbState.busy = false;
+    if (btn) btn.classList.remove('busy');
+    await loadAheadBehind().catch(() => {});
+    dbRender();
+  }
+}
+
+async function dbFetch() {
+  const res = await doFetch();
+  const ab = dbState.ab || res || {};
+  const failed = (res.results || []).filter((r) => !r.ok);
+  let msg = `Fetch xong — remote có ${Number(ab.behind) || 0} commit mới, bạn có ${Number(ab.ahead) || 0} commit chưa đẩy.`;
+  if (ab.hasUpstream === false) msg = 'Fetch xong — branch này chưa có trên remote (bấm Publish branch để đưa lên).';
+  if (failed.length) msg += '\nMột số remote lỗi: ' + failed.map((r) => `${r.remote}: ${r.hint || r.error}`).join('; ');
+  return msg;
+}
+
+async function dbPull() {
+  if (dbNeedsPublish()) throw new Error('Branch này chưa có trên remote nên chưa có gì để pull. Bấm "Publish branch" để đưa branch lên trước.');
+  const res = await doPull();
+  if (res && res.conflict) {
+    showView('local');
+    return `Pull có conflict ở ${(res.conflicts || []).length} file — đã mở tab Local Git để xử lý (Ours / Theirs).`;
+  }
+  const n = res.commitsPulled || 0;
+  return n ? `Pull xong — nhận ${n} commit, ${(res.changedFiles || []).length} file thay đổi.` : 'Pull xong — máy bạn đã mới nhất, không có commit mới.';
+}
+
+async function dbPush() {
+  const publish = dbNeedsPublish();
+  const res = await doPush(publish ? { setUpstream: true } : undefined);
+  const refs = [];
+  for (const r of (res.results || [res])) for (const ref of (r.refs || [])) refs.push(ref);
+  if (refs.length && refs.every((r) => r.status === 'up-to-date')) return 'Không có gì để push — remote đã có đủ commit.';
+  return publish ? 'Đã publish branch lên remote và đặt upstream.' : 'Push xong — commit đã lên remote.';
+}
+
+async function dbSelectRepoPath(p) {
+  const data = await api('/api/repo/select', 'POST', { path: p });
+  if (data.repository) $('repoPath').value = data.repository.path;
+  dbState.repoPath = data.repository ? data.repository.path : p;
+  dbState.branchList = [];
+  await refreshAllLocal();
+  await dbLoadRecent();
+  dbRender();
+  return data;
+}
+
+async function dbCloneFlow(fullNameOrUrl) {
+  let input = fullNameOrUrl;
+  if (!input) {
+    input = prompt('Nhập repo cần clone: owner/repo hoặc URL (https://github.com/owner/repo.git)', currentRepo ? currentRepo.full_name : '');
+    if (!input) return null;
+  }
+  input = input.trim();
+  const m = input.match(/^(?:https?:\/\/github\.com\/)?([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  const isUrl = /^(https?:\/\/|git@|ssh:\/\/)/i.test(input);
+  const fullName = m ? `${m[1]}/${m[2]}` : null;
+  const url = fullName && !/^(git@|ssh:\/\/)/i.test(input) ? `https://github.com/${fullName}.git` : input;
+  if (!fullName && !isUrl) throw new Error('Không hiểu repo cần clone — nhập dạng owner/repo hoặc URL đầy đủ.');
+  let suggested = '';
+  if (fullName) {
+    const f = await api('/api/repo/find?fullName=' + encodeURIComponent(fullName));
+    if (f.found) {
+      await dbSelectRepoPath(f.path);
+      return `Đã mở repo có sẵn trên máy: ${f.path}`;
+    }
+    suggested = f.suggestedPath;
+  }
+  const dest = prompt('Clone về thư mục nào trên máy? (thư mục phải chưa có hoặc đang rỗng — thư mục cha sẽ được tạo nếu thiếu)', suggested);
+  if (!dest) return null;
+  dbState.busy = true;
+  dbState.busyText = `Đang clone ${fullName || url}… (repo lớn có thể mất vài phút)`;
+  dbRender();
+  dbSetStatus(dbState.busyText, 'busy');
+  try {
+    const res = await api('/api/git/clone', 'POST', { url, path: dest.trim(), useGithubAuth: true });
+    if (res.repository) $('repoPath').value = res.repository.path;
+    dbState.repoPath = res.repository ? res.repository.path : dest.trim();
+    dbState.branchList = [];
+  } finally {
+    dbState.busy = false;
+  }
+  await refreshAllLocal();
+  await dbLoadRecent();
+  dbRender();
+  return `Clone xong: ${dbState.repoPath}`;
+}
+
+async function dbOpenCurrentRepoLocally() {
+  if (!currentRepo) throw new Error('Mở một repo trong danh sách trước.');
+  if (!dbState.bridge) throw new Error('Bridge chưa kết nối — chạy bridge trước.');
+  const msg = await dbCloneFlow(currentRepo.full_name);
+  if (msg) {
+    dbSetStatus(msg + '\nGiờ dùng được Fetch / Pull / Push ở thanh trên cùng.', 'ok');
+    log(msg);
+  }
+}
+
+$('dbFetchBtn').onclick = () => dbRun('dbFetchBtn', `Đang fetch ${dbRemote()}…`, dbFetch);
+$('dbPullBtn').onclick = () => dbRun('dbPullBtn', `Đang pull từ ${dbRemote()}…`, dbPull);
+$('dbPushBtn').onclick = () => dbRun('dbPushBtn', `Đang push lên ${dbRemote()}…`, dbPush);
+$('repoLocalBtn').onclick = () => dbOpenCurrentRepoLocally().catch((err) => {
+  dbState.busy = false;
+  dbRender();
+  const d = err.data || {};
+  dbSetStatus('✗ ' + String(err.message).split('\n→')[0] + (d.hint ? '\n→ ' + d.hint : ''), 'bad');
+  log('ERROR: ' + err.message);
+});
+
+$('dbRepoSelect').onchange = async () => {
+  const v = $('dbRepoSelect').value;
+  try {
+    if (v === '__add') {
+      const p = prompt('Đường dẫn đầy đủ tới thư mục repo Git trên máy (ví dụ C:\\Users\\ban\\Projects\\game hoặc /home/ban/game)', '');
+      if (p && p.trim()) {
+        await dbSelectRepoPath(p.trim());
+        dbSetStatus('Đã chọn repo: ' + dbState.repoPath, 'ok');
+      }
+    } else if (v === '__clone') {
+      const msg = await dbCloneFlow(null);
+      if (msg) dbSetStatus(msg, 'ok');
+    } else if (v && v !== dbState.repoPath) {
+      await dbSelectRepoPath(v);
+      dbSetStatus('Đã chọn repo: ' + dbState.repoPath, 'ok');
+    }
+  } catch (err) {
+    dbState.busy = false;
+    const d = err.data || {};
+    dbSetStatus('✗ ' + String(err.message).split('\n→')[0] + (d.hint ? '\n→ ' + d.hint : ''), 'bad');
+  }
+  await dbLoadRecent().catch(() => {});
+  dbRender();
+};
+
+$('dbBranchSelect').onchange = () => {
+  const branch = $('dbBranchSelect').value;
+  const current = (dbState.branchList.find((b) => b.current) || {}).name;
+  if (!branch || branch === current) return;
+  dbRun(null, `Đang chuyển sang branch ${branch}…`, async () => {
+    await api('/api/git/checkout', 'POST', { branch });
+    dbState.branchList = [];
+    await refreshAllLocal();
+    return `Đã chuyển sang branch ${branch}.`;
+  }).then(() => branches().catch(() => {}));
+};
+
+setInterval(() => { if (dbState.bridge) dbRender(); }, 30000);
+dbRender();
 
 (async () => {
   const c = await cfg();
