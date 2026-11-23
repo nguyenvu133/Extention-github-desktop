@@ -1,0 +1,1 @@
+{"name":"pixijs-github-desktop-local-bridge","version":"1.0.0","private":true,"description":"Local Git bridge for PixiJS GitHub Desktop Sync Chrome extension","scripts":{"start":"node bridge-server.js"},"engines":{"node":">=18"}}

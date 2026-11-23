@@ -1,0 +1,29 @@
+'use strict';
+const http=require('http'),fs=require('fs'),path=require('path'),os=require('os'),crypto=require('crypto'),{spawn}=require('child_process');
+const HOST='127.0.0.1',PORT=17321,ROOT=path.resolve(__dirname),TOKEN_FILE=path.join(ROOT,'.bridge-token');
+let token=fs.existsSync(TOKEN_FILE)?fs.readFileSync(TOKEN_FILE,'utf8').trim():crypto.randomBytes(24).toString('hex');fs.writeFileSync(TOKEN_FILE,token,{mode:0o600});let repoPath=null;
+function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type, Authorization','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
+function runGit(args,opts={}){return new Promise((resolve,reject)=>{if(!repoPath)return reject(Error('No repository connected'));const child=spawn('git',args,{cwd:repoPath,windowsHide:true,shell:false});let out='',err='';child.stdout.on('data',d=>out+=d);child.stderr.on('data',d=>err+=d);child.on('error',reject);child.on('close',code=>code===0?resolve(out.trim()):reject(Error((err||out||`git exited ${code}`).trim())));});}
+function body(req){return new Promise((resolve,reject)=>{let s='';req.on('data',c=>{s+=c;if(s.length>1e6)reject(Error('Request too large'))});req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch{reject(Error('Invalid JSON'))}})});}
+function safeRepo(p){const abs=path.resolve(String(p||''));if(!fs.existsSync(abs)||!fs.statSync(abs).isDirectory())throw Error('Repository directory does not exist');return abs;}
+function safeRel(p){const v=String(p||'');if(!v||path.isAbsolute(v)||v.split(/[\\/]/).includes('..'))throw Error('Invalid repository-relative path');return v;}
+async function route(req,res){if(req.method==='OPTIONS')return send(res,204,{});const u=new URL(req.url,`http://${HOST}:${PORT}`);if(u.pathname==='/health'){let repository=null;if(repoPath){try{const name=path.basename(repoPath),branch=await runGit(['branch','--show-current']);let remote='';try{remote=await runGit(['remote','get-url','origin'])}catch{}repository={name,path:repoPath,branch,remote}}catch{repository={name:path.basename(repoPath),path:repoPath,branch:null,remote:null}}}return send(res,200,{ok:true,version:'1.0.0',repository});}
+if(req.headers.authorization!==`Bearer ${token}`)return send(res,401,{error:'Unauthorized: invalid bridge token'});
+try{let data={};if(req.method==='POST')data=await body(req);
+if(u.pathname==='/api/repo/select'&&req.method==='POST'){repoPath=safeRepo(data.path);await runGit(['rev-parse','--show-toplevel']);return send(res,200,{ok:true,path:repoPath});}
+if(!repoPath)return send(res,400,{error:'Connect a repository first'});
+if(u.pathname==='/api/git/status'){const raw=await runGit(['status','--porcelain=v1','-uall']);const files=raw?raw.split('\n').map(line=>{const x=line.slice(0,2),p=line.slice(3);return{status:x.trim()||'?',path:p,staged:x[0]!==' '&&x[0]!=='?',unstaged:x[1]!==' '}}):[];return send(res,200,{branch:await runGit(['branch','--show-current']),files});}
+if(u.pathname==='/api/git/stage'&&req.method==='POST'){await runGit(['add','--',safeRel(data.path)]);return send(res,200,{ok:true});}
+if(u.pathname==='/api/git/unstage'&&req.method==='POST'){await runGit(['restore','--staged','--',safeRel(data.path)]);return send(res,200,{ok:true});}
+if(u.pathname==='/api/git/stage-all'&&req.method==='POST'){await runGit(['add','-A']);return send(res,200,{ok:true});}
+if(u.pathname==='/api/git/commit'&&req.method==='POST'){if(!String(data.summary||'').trim())throw Error('Commit summary is required');const msg=String(data.summary).trim()+(data.description?'\n\n'+String(data.description):'');const result=await runGit(['commit','-m',msg]);return send(res,200,{ok:true,result});}
+if(u.pathname==='/api/git/fetch'&&req.method==='POST'){return send(res,200,{ok:true,result:await runGit(['fetch','--all','--prune'])});}
+if(u.pathname==='/api/git/pull'&&req.method==='POST'){return send(res,200,{ok:true,result:await runGit(['pull','--ff-only'])});}
+if(u.pathname==='/api/git/push'&&req.method==='POST'){return send(res,200,{ok:true,result:await runGit(['push'])});}
+if(u.pathname==='/api/git/branches'){const raw=await runGit(['branch','--format=%(HEAD)|%(refname:short)']);return send(res,200,{branches:raw?raw.split('\n').map(x=>({current:x.startsWith('*'),name:x.split('|').slice(1).join('|')})):[]});}
+if(u.pathname==='/api/git/checkout'&&req.method==='POST'){const b=String(data.branch||'');if(!/^[A-Za-z0-9._/-]+$/.test(b)||b.includes('..'))throw Error('Invalid branch name');const dirty=await runGit(['status','--porcelain']);if(dirty)throw Error('Working tree has changes. Commit or stash them before switching branch.');return send(res,200,{ok:true,result:await runGit(['switch',b])});}
+if(u.pathname==='/api/git/log'){const raw=await runGit(['log','-30','--date=short','--pretty=format:%h%x1f%s%x1f%an%x1f%ad']);const commits=raw?raw.split('\n').map(x=>{const [hash,subject,author,date]=x.split('\x1f');return{hash,subject,author,date}}):[];return send(res,200,{commits});}
+if(u.pathname==='/api/git/diff'){const p=safeRel(u.searchParams.get('path'));let diff='';try{diff=await runGit(['diff','HEAD','--',p])}catch(e){diff=e.message}if(!diff)try{diff=await runGit(['diff','--cached','--',p])}catch{}return send(res,200,{path:p,diff:diff||'(No text diff; file may be untracked or binary.)'});}
+return send(res,404,{error:'Unknown endpoint'});
+}catch(e){return send(res,400,{error:e.message||'Bridge error'});}}
+http.createServer((req,res)=>route(req,res).catch(e=>send(res,500,{error:e.message}))).listen(PORT,HOST,()=>{console.log('\nPixiJS Git Bridge v1.0.0');console.log(`Listening: http://${HOST}:${PORT}`);console.log(`TOKEN: ${token}`);console.log('Keep this terminal open. Press Ctrl+C to stop.\n');});
