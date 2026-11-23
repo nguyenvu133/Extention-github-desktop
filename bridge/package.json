@@ -19,7 +19,8 @@
     "test:v311": "node ../tests/bridge-v311-test.js",
     "test:e2e": "node ../tests/e2e-toolbar.js",
     "test:v350": "node ../tests/bridge-v350-test.js",
-    "test:bat": "node ../tests/bat-test.js"
+    "test:bat": "node ../tests/bat-test.js",
+    "test:v351": "node ../tests/env-test.js"
   },
-  "version": "3.5.0"
+  "version": "3.5.1"
 }

@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.5.0
+# PixiJS GitHub Desktop Sync — v3.5.1
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -326,6 +326,31 @@ hiện cảnh báo rõ — bạn đang đăng nhập nhầm tài khoản, hãy �
 hiện mật khẩu / token / Client Secret. Lưu ý: bước đồng ý trên github.com
 vẫn phải do chính bạn bấm trong trình duyệt — bridge không thể bấm thay bạn.
 
+### Cấu hình tự động bằng file .env (v3.5.1) — mở lên là dùng được
+
+Nếu bạn chán dán lại token mỗi lần tải code mới về, dùng file `.env`:
+
+**Cách nhanh nhất (Windows):** đúp chuột vào `bridge\setup-env.bat`
+(Mac/Linux: `sh bridge/setup-env.sh`). Nó hỏi 3 thứ rồi ghi vào
+`bridge\.env` cho bạn: mã GitHub PAT, OAuth Client ID, OAuth Client
+Secret, và đường dẫn repo mặc định. Nó cũng tự sinh một bridge token
+ổn định rồi in ra màn hình — bạn dán token đó **1 lần duy nhất** vào
+extension (mục LOCAL BRIDGE), sau này không cần dán lại nữa.
+
+**Cách tay:** copy `bridge\.env.example` thành `bridge\.env` rồi điền
+các giá trị vào. Các khóa được hỗ trợ: `BRIDGE_TOKEN` (token ổn định
+thay vì sinh ngẫu nhiên), `BRIDGE_PORT`, `GITHUB_PAT` (tự đăng nhập
+GitHub khi bridge khởi động), `GITHUB_OAUTH_CLIENT_ID`,
+`GITHUB_OAUTH_CLIENT_SECRET`, `DEFAULT_REPO_PATH` (tự chọn repo khi
+mở bridge). Biến môi trường thật luôn thắng cùng khóa trong `.env`.
+
+Sau đó chỉ cần chạy bridge như bình thường — nó tự đọc `.env`, tự đăng
+nhập GitHub, tự cấu hình OAuth App, tự chọn repo. Lần đầu mở dashboard
+bạn vẫn cần dán bridge token 1 lần (token này giờ đã ổn định, không đổi
+nữa). **Cảnh báo:** `bridge\.env` đã được gitignore và **không bao giờ**
+được đẩy lên GitHub — ai có file này sẽ đăng nhập GitHub được như bạn.
+Đừng gửi nó qua chat/email, đừng chụp màn hình nó.
+
 ### Token hết hạn thì sao?
 
 - Classic token hết hạn → GitHub trả 401 → dashboard báo "GitHub token
@@ -633,9 +658,9 @@ Extention-github-desktop/
 
 | Token | Lưu ở đâu | Ai thấy được |
 |---|---|---|
-| **Token GitHub (PAT/OAuth)** | `bridge/.github-config.json` trên máy bạn, mode 0600, đã gitignore | Chỉ bridge (đọc file) — **không gửi cho extension, không log, không commit** |
-| **OAuth App Client Secret** | `bridge/.github-oauth.json` trên máy bạn, mode 0600, đã gitignore (hoặc biến môi trường `GITHUB_OAUTH_CLIENT_SECRET`) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
-| **Token bridge** | `bridge/.bridge-token` trên máy bạn, mode 0600, đã gitignore; bản copy trong `chrome.storage` của extension | Extension (để gọi API bridge), bạn (copy từ terminal) |
+| **Token GitHub (PAT/OAuth)** | `bridge/.github-config.json` trên máy bạn, mode 0600, đã gitignore (hoặc `GITHUB_PAT` trong `bridge/.env`, cũng 0600 và gitignore) | Chỉ bridge (đọc file) — **không gửi cho extension, không log, không commit** |
+| **OAuth App Client Secret** | `bridge/.github-oauth.json` trên máy bạn, mode 0600, đã gitignore (hoặc biến môi trường `GITHUB_OAUTH_CLIENT_SECRET` / `bridge/.env`) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
+| **Token bridge** | `bridge/.bridge-token` trên máy bạn, mode 0600, đã gitignore; bản copy trong `chrome.storage` của extension (hoặc `BRIDGE_TOKEN` trong `bridge/.env`) | Extension (để gọi API bridge), bạn (copy từ terminal) |
 | **Cài đặt** (URL bridge, repo local, auto-update) | `chrome.storage` | Chỉ extension |
 
 - Extension **không bao giờ** giữ token GitHub thô hay Client Secret. Mọi lệnh
@@ -643,7 +668,7 @@ Extention-github-desktop/
 - Bridge chỉ nghe trên **127.0.0.1** (localhost) — máy khác trong mạng không
   kết nối được.
 - **Đừng bao giờ** commit file `.github-config.json`, `.github-oauth.json`,
-  `.bridge-token`, `.bridge-state.json` lên GitHub, đừng gửi token/secret qua
+  `.bridge-token`, `.bridge-state.json`, **`bridge/.env`** lên GitHub, đừng gửi token/secret qua
   chat/email, đừng dán chúng vào issue công khai. Lỡ lộ token GitHub → vào
   <https://github.com/settings/tokens> → **Revoke** ngay rồi tạo token mới.
   Lỡ lộ Client Secret → vào OAuth App → **Generate a new client secret**.
@@ -891,7 +916,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 12 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 13 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -985,6 +1010,17 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.5.1 (2026-11-23)** — **Cấu hình tự động bằng file `.env` (mở lên
+  là dùng được):** bridge tự đọc `bridge/.env` khi khởi động —
+  `BRIDGE_TOKEN` ổn định (không đổi mỗi lần tải lại), `GITHUB_PAT` tự
+  đăng nhập GitHub, `GITHUB_OAUTH_CLIENT_ID/SECRET` tự cấu hình OAuth
+  App, `DEFAULT_REPO_PATH` tự chọn repo; biến môi trường thật luôn thắng
+  `.env`; PAT sai hoặc repo không tồn tại chỉ ghi cảnh báo, bridge vẫn
+  chạy. Thêm `bridge/.env.example` (mẫu an toàn, không có secret thật),
+  `bridge/setup-env.bat` / `bridge/setup-env.sh` (hỏi 3 giá trị 1 lần rồi
+  ghi `bridge/.env` 0600, tự sinh bridge token ổn định); `.env` đã
+  gitignore, **không bao giờ** đẩy lên GitHub. Test: 13 suite (suite mới
+  `tests/env-test.js` 22/22).
 - **v3.5.0 (2026-11-23)** — "Giống github.com hơn nữa": **tab Actions**
   (workflows, runs, jobs, log, Rerun/Cancel); **trang repo mở rộng**
   (chi tiết commit, blame, lịch sử file, compare `base...head`, chi tiết

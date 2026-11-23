@@ -2,7 +2,7 @@
 require('./_node16-fetch'); // Node 16.13 has no global fetch
 
 /*
- * tests/bat-test.js — Windows launcher / doctor script checks (v3.5.0).
+ * tests/bat-test.js — Windows launcher / doctor script checks (v3.5.1).
  *
  * Covers the five launcher/doctor scripts, which the bridge tests never
  * execute:
@@ -554,6 +554,38 @@ async function main() {
     ]) {
       check(`README: ${name}`, re.test(readme), readme.slice(0, 200));
     }
+  }
+
+  /* ==================== 8. setup-env scripts (v3.5.1) ==================== */
+  console.log('\n[8] setup-env.bat + setup-env.sh — .env one-time setup');
+  {
+    const buf = fs.readFileSync(path.join(ROOT, 'bridge', 'setup-env.bat'));
+    const text = checkBatchBytes(buf, 'setup-env.bat');
+    for (const [name, re] of [
+      ['writes bridge/.env', /\.env/],
+      ['asks for the GitHub PAT', /GITHUB_PAT=/],
+      ['asks for OAuth Client ID + Secret', /GITHUB_OAUTH_CLIENT_ID=/ && /GITHUB_OAUTH_CLIENT_SECRET=/],
+      ['asks for DEFAULT_REPO_PATH', /DEFAULT_REPO_PATH=/],
+      ['generates a stable BRIDGE_TOKEN', /BRIDGE_TOKEN=/],
+      ['version string matches manifest (v' + MANIFEST_VERSION + ')', new RegExp('v' + MANIFEST_VERSION.replace(/\./g, '\\.'))],
+    ]) {
+      check(`setup-env.bat: ${name}`, re.test(text));
+    }
+    batchChecks(text, 'setup-env.bat');
+  }
+  {
+    const buf = fs.readFileSync(path.join(ROOT, 'bridge', 'setup-env.sh'));
+    const text = checkShBytes(buf, 'setup-env.sh');
+    for (const [name, re] of [
+      ['writes bridge/.env', /\.env/],
+      ['asks for the GitHub PAT', /GITHUB_PAT=/],
+      ['asks for OAuth Client ID + Secret', /GITHUB_OAUTH_CLIENT_ID=/ && /GITHUB_OAUTH_CLIENT_SECRET=/],
+      ['writes the file with chmod 600', /chmod 600/],
+      ['generates a BRIDGE_TOKEN', /BRIDGE_TOKEN=/],
+    ]) {
+      check(`setup-env.sh: ${name}`, re.test(text));
+    }
+    check('setup-env.sh: executable bit set', (fs.statSync(path.join(ROOT, 'bridge', 'setup-env.sh')).mode & 0o111) !== 0);
   }
 
   cleanup(failures === 0 ? 0 : 1);

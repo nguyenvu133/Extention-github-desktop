@@ -107,7 +107,45 @@ const zlib = require('zlib'); // v3.5.0: inflate GitHub Actions log ZIPs (no ext
 })();
 const { URL } = require('url');
 
-const VERSION = '3.5.0';
+/* ------------------------------------------------------------------ */
+/* .env auto-config (v3.5.1) — no dependencies, no magic.              */
+/* On startup the bridge reads ONE file — <DATA_DIR>/.env, where      */
+/* DATA_DIR is BRIDGE_DATA_DIR when set, otherwise this file's own    */
+/* folder (bridge/) — and fills in any process.env key that is not    */
+/* already set. A real environment variable always wins over .env.    */
+/* Loading only the data dir's file matters: test bridges run with a  */
+/* throwaway BRIDGE_DATA_DIR, so they must never pick up the real     */
+/* machine's .env (that would sign them in with a real PAT against    */
+/* their mock GitHub). Supported keys (see bridge/.env.example):      */
+/* BRIDGE_TOKEN, BRIDGE_PORT, GITHUB_PAT, GITHUB_OAUTH_CLIENT_ID,     */
+/* GITHUB_OAUTH_CLIENT_SECRET, DEFAULT_REPO_PATH. Only the KEY NAMES  */
+/* are ever logged, never the values. .env is git-ignored (see        */
+/* .gitignore) and must NEVER be pushed to GitHub — it can hold live  */
+/* secrets.                                                           */
+/* ------------------------------------------------------------------ */
+function loadDotEnv() {
+  const found = [];
+  const dataDir = process.env.BRIDGE_DATA_DIR ? path.resolve(process.env.BRIDGE_DATA_DIR) : path.resolve(__dirname);
+  const file = path.join(dataDir, '.env');
+  try {
+    if (!fs.existsSync(file)) return found;
+    for (const rawLine of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (!m) continue;
+      let value = m[2].trim();
+      if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) value = value.slice(1, -1);
+      if (process.env[m[1]] === undefined) process.env[m[1]] = value;
+      if (!found.includes(m[1])) found.push(m[1]);
+    }
+    try { fs.chmodSync(file, 0o600); } catch (_) {}
+  } catch (_) {}
+  return found;
+}
+const DOTENV_KEYS = loadDotEnv();
+
+const VERSION = '3.5.1';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -263,6 +301,18 @@ function escHtml(value) {
 /* ------------------------------------------------------------------ */
 
 function loadToken() {
+  // v3.5.1: a BRIDGE_TOKEN in .env (or the real environment) is stable
+  // across restarts and fresh downloads — use it when present, and
+  // mirror it into .bridge-token so the old hint still works.
+  const envToken = String(process.env.BRIDGE_TOKEN || '').trim();
+  if (envToken && !/\s/.test(envToken) && envToken.length >= 16) {
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(TOKEN_FILE, envToken, { mode: 0o600 });
+      try { fs.chmodSync(TOKEN_FILE, 0o600); } catch (_) {}
+    } catch (_) {}
+    return envToken;
+  }
   try {
     if (fs.existsSync(TOKEN_FILE)) {
       const existing = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
@@ -4228,6 +4278,43 @@ autoUpdate.intervalSeconds = clampInterval(ghConfig.autoUpdate && ghConfig.autoU
 autoUpdate.autoSync = !!(ghConfig.autoUpdate && ghConfig.autoUpdate.autoSync);
 scheduleAutoUpdate();
 
+/* v3.5.1: auto-configure from .env / environment before listening,   */
+/* so opening the extension just works: a GITHUB_PAT signs in         */
+/* automatically (validated first — an invalid one only logs a        */
+/* warning, the bridge still starts), and DEFAULT_REPO_PATH selects   */
+/* that local repo when no repo was remembered. Nothing here ever     */
+/* logs a secret value, only login names and paths.                   */
+async function autoConfigureFromEnv() {
+  if (DOTENV_KEYS.length) log(`.env loaded (${DOTENV_KEYS.join(', ')}) — real environment variables take precedence.`);
+  if (!ghAuthed()) {
+    const pat = String(process.env.GITHUB_PAT || '').trim();
+    if (pat) {
+      try {
+        const { user, scopes } = await ghValidateToken(pat);
+        signInWithToken(pat, user, scopes, 'pat');
+        log(`Auto sign-in from .env: GitHub user ${(user && user.login) || 'unknown'} (PAT).`);
+      } catch (err) {
+        log(`GITHUB_PAT from .env is invalid or GitHub rejected it (${(err && err.message) || err}) — sign in from the extension instead.`);
+      }
+    }
+  }
+  const defaultRepo = String(process.env.DEFAULT_REPO_PATH || '').trim();
+  if (defaultRepo && !repoPath) {
+    try {
+      const abs = path.resolve(defaultRepo);
+      if (fs.existsSync(abs) && fs.statSync(abs).isDirectory() && fs.existsSync(path.join(abs, '.git'))) {
+        repoPath = abs;
+        saveState();
+        log(`Auto-selected repository from .env: ${abs}`);
+      } else {
+        log(`DEFAULT_REPO_PATH from .env is not a Git repository: ${abs}`);
+      }
+    } catch (err) {
+      log(`Could not auto-select DEFAULT_REPO_PATH: ${err.message}`);
+    }
+  }
+}
+
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
     const status = err instanceof GhError ? (err.status || 400) : 400;
@@ -4252,7 +4339,11 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, HOST, () => {
+// v3.5.1: auto-configure from .env first, then start listening, so
+// the first request already sees the signed-in state and the repo.
+(async () => {
+  await autoConfigureFromEnv();
+  server.listen(PORT, HOST, () => {
   console.log('');
   console.log(`PixiJS GitHub Bridge v${VERSION}`);
   console.log(`Listening:  http://${HOST}:${PORT}`);
@@ -4273,7 +4364,8 @@ server.listen(PORT, HOST, () => {
   console.log('Paste the TOKEN into the extension dashboard, then click "Connect Bridge".');
   console.log('Keep this terminal open. Press Ctrl+C to stop.');
   console.log('');
-});
+  });
+})();
 
 function shutdown() {
   console.log('\nStopping bridge…');

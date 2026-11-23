@@ -1,6 +1,6 @@
 @echo off
 REM PixiJS GitHub Desktop Sync - bridge launcher (Windows)
-REM v3.5.0 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
+REM v3.5.1 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
 REM a UTF-8 / LF-only .bat can be misparsed, so the window flashes
 REM and closes without showing the error. Keep this file ASCII + CRLF.
 setlocal EnableDelayedExpansion
@@ -8,7 +8,7 @@ title PixiJS GitHub Bridge
 cd /d "%~dp0"
 if not defined BRIDGE_PORT set BRIDGE_PORT=17321
 set LOG=bridge-start.log
-call :log "=== PixiJS GitHub Bridge v3.5.0 ==="
+call :log "=== PixiJS GitHub Bridge v3.5.1 ==="
 call :log "Thu muc bridge: %CD%"
 call :log "Cong: %BRIDGE_PORT%"
 call :logblank

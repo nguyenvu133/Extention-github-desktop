@@ -1,18 +1,18 @@
 'use strict';
 /**
- * tests/run-all.js — Run the FULL v3.5.0 test suite in one command.
+ * tests/run-all.js — Run the FULL v3.5.1 test suite in one command.
  *
  *   node tests/run-all.js
  *
  * Starts a real bridge on BRIDGE_PORT (default 17321) — needed by
  * tests/extension-test.js, which reads bridge/.bridge-token — then runs
- * all 11 suites in order and stops the bridge. Exit code 0 = all pass.
+ * all 13 suites in order and stops the bridge. Exit code 0 = all pass.
  *
  * No real GitHub API is called: bridge-v2-test.js, bridge-v21-test.js,
  * bridge-v3-test.js, bridge-v301-test.js, bridge-v302-test.js, bridge-v310-test.js,
- * bridge-v311-test.js and bridge-v350-test.js use their own mock GitHub
+ * bridge-v311-test.js, bridge-v350-test.js and env-test.js use their own mock GitHub
  * servers and their own bridges on ports 17399, 17398, 17397, 17395,
- * 17394, 17386, 17387 and 17388 (mocks on 17412, 17413 and 17414).
+ * 17394, 17386, 17387, 17388 and 17391-17393 (mocks on 17412, 17413, 17414 and 17415).
  * bat-test.js checks the launcher/doctor scripts by bytes + structure
  * (.bat files are never executed — no cmd.exe on Linux) and runs the
  * .sh launchers for real against its own bridges on ports 17389/17390.
@@ -35,7 +35,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v3.5.0 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v3.5.1 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -78,6 +78,7 @@ async function main() {
     ['bridge-v310-test.js', 'Bridge v3.1.0 (extended pull/push: preview, autostash, undo, rebase flow, all branches, refspecs, multi-remote, history, GitHub token, Node 16.13)'],
     ['bridge-v311-test.js', 'Bridge v3.1.1 (toolbar routes: recent/find repo, per-remote fetch + GitHub token, clone into ~/GitHub, publish branch)'],
     ['bridge-v350-test.js', 'Bridge v3.5.0 (pull origin incl. autostash/rebase/undo/pull-remotes/upstream, mock-OAuth end-to-end, Actions/commit/compare/languages/contributors/topics/issue+PR detail, worktrees, graph)'],
+    ['env-test.js', 'Bridge v3.5.1 (.env auto-config: parser, PAT auto sign-in, OAuth auto-config, DEFAULT_REPO_PATH, precedence, setup scripts)'],
     ['extension-test.js', 'Extension functional (local Git against the live bridge)'],
   ];
   let failed = 0;

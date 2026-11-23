@@ -8,6 +8,12 @@
 # NEVER commit this file — it contains a live secret.
 .github-oauth.json
 
+# Auto-config file: bridge/.env can hold a live PAT, OAuth secret and
+# bridge token (0600). NEVER commit it — anyone with it can act as you
+# on GitHub. The TEMPLATE bridge/.env.example is safe to commit.
+.env
+bridge/.env
+
 # Dependencies
 node_modules/
 

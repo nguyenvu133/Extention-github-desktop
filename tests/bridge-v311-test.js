@@ -78,7 +78,7 @@ async function main() {
     process.exit(code);
   };
   for (let i = 0; i < 150 && !out.includes('Listening:'); i += 1) await new Promise((r) => setTimeout(r, 100));
-  check('bridge v3.5.0 starts on Node ' + process.version, /v3\.5\.0/.test(out), out.slice(0, 200));
+  check('bridge v3.5.1 starts on Node ' + process.version, /v3\.5\.1/.test(out), out.slice(0, 200));
   const token = fs.readFileSync(path.join(dataDir, '.bridge-token'), 'utf8').trim();
   const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
   async function call(method, p, body) {
