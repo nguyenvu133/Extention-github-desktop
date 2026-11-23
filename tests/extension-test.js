@@ -160,8 +160,9 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '3.0.0' }),
+      getManifest: () => ({ version: '3.0.1' }),
       getURL: (p) => 'chrome-extension://test/' + p,
+      id: 'test-extension-id', // v3.0.1: isExtensionContext() needs this
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },
     },
@@ -189,6 +190,11 @@ const DASHBOARD_IDS = [
   'reloadPulls', 'pullList',
   // v3.0: login wizard + diagnostics
   'diagBtn', 'diagStatus', 'diagList', 'oauthConfigDetails',
+  // v3.0.1: bridge-down notice + connection diagnostics + login gate
+  'bridgeDownNotice', 'bridgeDownNoticeText', 'bridgeRetryBtn',
+  'connDiagBtn', 'connDiagStatus', 'connDiagList', 'outsideExtensionNotice',
+  'oauthConnectBtn', 'oauthSaveBtn', 'oauthClientId', 'oauthClientSecret',
+  'oauthCallbackUrl', 'oauthConnectHint', 'oauthCopyCallbackBtn', 'userAuthMethod',
   // v3.0: notifications
   'notifBtn', 'notifBadge', 'notifPanel', 'notifList', 'notifMarkReadBtn', 'notifCloseBtn',
   // v3.0: create repo + repo actions
@@ -219,8 +225,10 @@ const DASHBOARD_IDS = [
   'deleteTagName', 'deleteTagBtn', 'pushTagName', 'pushTagBtn', 'refreshTagsBtn',
 ];
 
-function runScript(file, ids, store) {
-  const code = fs.readFileSync(path.join(EXT, file), 'utf8');
+function runScript(files, ids, store) {
+  // v3.0.1: files may be an array — bridge-client.js must load BEFORE
+  // dashboard.js / popup.js so its helpers are global when they run.
+  const list = Array.isArray(files) ? files : [files];
   const document = makeDocument(ids);
   const sandbox = {
     document,
@@ -239,7 +247,10 @@ function runScript(file, ids, store) {
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
-  vm.runInContext(code, sandbox, { filename: file });
+  for (const file of list) {
+    const code = fs.readFileSync(path.join(EXT, file), 'utf8');
+    vm.runInContext(code, sandbox, { filename: file });
+  }
   return { document, sandbox };
 }
 
@@ -258,7 +269,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     /* --- 1. dashboard.js boots and connects --- */
     console.log('[dashboard.js]');
     const store = { bridgeUrl: BASE, token: TOKEN };
-    const dash = runScript('dashboard.js', DASHBOARD_IDS, store);
+    const dash = runScript(['bridge-client.js', 'dashboard.js'], DASHBOARD_IDS, store);
 
     await sleep(1200);
     const d = dash.document;
@@ -327,7 +338,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     /* --- 4. error path: bad token --- */
     console.log('\n[error handling]');
-    const bad = runScript('dashboard.js', DASHBOARD_IDS, { bridgeUrl: BASE, token: 'deadbeef'.repeat(6) });
+    const bad = runScript(['bridge-client.js', 'dashboard.js'], DASHBOARD_IDS, { bridgeUrl: BASE, token: 'deadbeef'.repeat(6) });
     await sleep(1000);
     bad.document.getElementById('repoPath').value = repo;
     await bad.document.getElementById('connectRepo').onclick();
@@ -338,7 +349,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     /* --- 5. popup.js --- */
     console.log('\n[popup.js]');
-    const pop = runScript('popup.js', [
+    const pop = runScript(['bridge-client.js', 'popup.js'], [
       'lamp', 'connection', 'bridgeDetail', 'repoName', 'branchName', 'repoPath', 'message',
       'version', 'token', 'refresh', 'saveToken', 'open', 'downloadZipBtn',
       'githubBox', 'githubSignedOut', 'githubSignedIn', 'ghAvatar', 'ghLogin', 'ghEmail',
@@ -352,7 +363,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
     check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
       p.getElementById('message').textContent);
-    check('popup version from manifest', p.getElementById('version').textContent === 'v3.0.0',
+    check('popup version from manifest', p.getElementById('version').textContent === 'v3.0.1',
       p.getElementById('version').textContent);
     check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
       p.getElementById('repoName').textContent);
@@ -439,6 +450,51 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('settings default branch persisted to storage', store.settingsDefaultBranch === 'main',
       'stored=' + store.settingsDefaultBranch);
     check('settings notifications persisted to storage', store.settingsNotifications === true);
+
+    /* --- 7. dashboard + popup v3.0.1 (fix "Failed to fetch") --- */
+    console.log('\n[dashboard + popup v3.0.1]');
+    for (const fn of ['translateBridgeError', 'bridgeFetch', 'checkBridgeHealth', 'checkConnectionSteps', 'isExtensionContext']) {
+      check(`bridge-client function ${fn} exists`, dashEval(`typeof ${fn}`) === 'function');
+    }
+    check('translateBridgeError: Failed to fetch -> BRIDGE_UNREACHABLE + Vietnamese',
+      dashEval(`translateBridgeError(new TypeError('Failed to fetch'))`).code === 'BRIDGE_UNREACHABLE' &&
+      /Bridge chưa chạy/.test(dashEval(`translateBridgeError(new TypeError('Failed to fetch'))`).message) &&
+      !/Failed to fetch/.test(dashEval(`translateBridgeError(new TypeError('Failed to fetch'))`).message));
+    check('login buttons enabled while the bridge is up',
+      d.getElementById('oauthConnectBtn').disabled === false &&
+      d.getElementById('deviceFlowBtn').disabled === false &&
+      d.getElementById('loginPatBtn').disabled === false);
+    check('bridge-down notice hidden while the bridge is up',
+      d.getElementById('bridgeDownNotice').classList.contains('hidden') === true);
+    check('outside-extension notice hidden inside the extension',
+      d.getElementById('outsideExtensionNotice').classList.contains('hidden') === true);
+    for (const fn of ['setLoginEnabled', 'ensureBridgeUp', 'runConnectionDiagnostics']) {
+      check(`v3.0.1 function ${fn} exists`, dashEval(`typeof ${fn}`) === 'function');
+    }
+    let deadErr = null;
+    try {
+      await dashEval(`fetchJson('http://127.0.0.1:17499/health')`);
+    } catch (e) { deadErr = e; }
+    check('dashboard fetchJson(dead port) throws translated BRIDGE_UNREACHABLE',
+      !!deadErr && deadErr.code === 'BRIDGE_UNREACHABLE' && /Bridge chưa chạy/.test(deadErr.message) &&
+      !/Failed to fetch/.test(deadErr.message),
+      deadErr ? deadErr.code + ' / ' + String(deadErr.message).slice(0, 80) : 'no error');
+    const connSteps = await dashEval('runConnectionDiagnostics()');
+    check('runConnectionDiagnostics(live bridge): 5 steps, none failed',
+      Array.isArray(connSteps) && connSteps.length === 5 && connSteps.every((s) => s.ok === true),
+      JSON.stringify(connSteps).slice(0, 200));
+    check('runConnectionDiagnostics panel status says all steps passed',
+      /đều đạt/.test(d.getElementById('connDiagStatus').textContent),
+      d.getElementById('connDiagStatus').textContent);
+    check('popup showError helper exists',
+      vm.runInContext('typeof showError', pop.sandbox) === 'function');
+    let popDeadErr = null;
+    try {
+      await vm.runInContext(`fetchJson('http://127.0.0.1:17499/health')`, pop.sandbox);
+    } catch (e) { popDeadErr = e; }
+    check('popup fetchJson(dead port) throws translated BRIDGE_UNREACHABLE',
+      !!popDeadErr && popDeadErr.code === 'BRIDGE_UNREACHABLE' && !/Failed to fetch/.test(popDeadErr.message),
+      popDeadErr ? popDeadErr.code : 'no error');
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }

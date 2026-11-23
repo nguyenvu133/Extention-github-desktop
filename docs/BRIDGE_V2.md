@@ -630,3 +630,146 @@ storage). `validate-manifest` + `load-from-root-test` cũng pass.
   extension (bridge v2.1 trả 404 thì UI xử lý mềm, không vỡ); end-to-end
   với bridge v3.0 đã được kiểm tra ở phía bridge (108/108) nhưng chưa
   click thật trên Chrome.
+
+## 7. v3.0.1 — Sửa lỗi "Failed to fetch" khi đăng nhập
+
+> Phiên bản: **3.0.1** · Ngày: 2026-11-23 · Head trước khi làm: `a6acec83` (v3.0.0)
+> Giữ nguyên toàn bộ tính năng v3.0.0, chỉ sửa/thêm phần lỗi kết nối.
+
+### 7.1. Chẩn đoán — "Failed to fetch" là gì, nguyên nhân nào đúng
+
+**Báo cáo của user:** bấm đăng nhập báo `ERROR: Failed to fetch`.
+
+`Failed to fetch` không phải lỗi GitHub, không phải lỗi token — đó là
+`TypeError` của `fetch()`: trình duyệt **không nhận được bất kỳ phản hồi
+nào** từ bridge. Kiểm chứng từng nguyên nhân trong code v3.0.0:
+
+| # | Nguyên nhân nghi ngờ | Kết quả kiểm chứng |
+|---|---|---|
+| 1 | **Bridge chưa chạy** trên máy user | **ĐÚNG — nguyên nhân số 1.** Không một nút đăng nhập nào kiểm tra `/health` trước: `run()` (dashboard.js:2080) gọi `fetchJson` thẳng, `fetchJson` dùng `fetch()` trần nên bridge tắt → `TypeError: Failed to fetch` → hiện nguyên văn `err.message` cho user. Không có cơ chế vô hiệu hoá nút khi bridge tắt. |
+| 2 | **CORS** | **ĐÚNG một phần — chỉ ngoài extension.** Trong extension thì OK (host_permissions bypass CORS), nhưng `corsOrigin()` chỉ cho `chrome-extension://` và `moz-extension://`: dashboard mở dưới dạng `file://` (Origin: null) hoặc `http://localhost` không nhận được header `Access-Control-Allow-Origin` → preflight fail → cũng ra "Failed to fetch". Không có phát hiện "mở ngoài extension" nào. |
+| 3 | **URL bridge sai / port khác** | **LOẠI TRỪ phần lớn.** `bridgeUrl` lấy từ `chrome.storage`, mặc định đúng `http://127.0.0.1:17321`, không có chỗ nào hardcode sai. Chỉ còn rủi ro user đổi cổng mà quên sửa Bridge URL — đã thêm bước kiểm tra cổng vào panel chẩn đoán. |
+| 4 | **Dashboard mở ngoài extension** | **ĐÚNG (cùng gốc với #2).** Mở `dashboard.html` trực tiếp từ repo/`file://`/`https` thì origin null/https, fetch về `http://127.0.0.1` bị chặn. v3.0.0 không cảnh báo gì. |
+| 5 | **Start script yếu** | **ĐÚNG.** `.bat` ghi v2.0.0, không kiểm tra node; `.sh` không kiểm tra node, không pause/read — cửa sổ đóng ngay khi lỗi, user không kịp đọc. Không báo cổng đang dùng. |
+
+### 7.2. Sửa trong v3.0.1
+
+- **Mới `extension/bridge-client.js` (~12 KB, dùng chung popup +
+  dashboard):** `translateBridgeError()` — mọi lỗi mạng (`TypeError` /
+  "Failed to fetch" / timeout / `ECONNREFUSED`) đều dịch thành mã
+  `BRIDGE_UNREACHABLE` (hoặc `BRIDGE_TIMEOUT`) + thông báo tiếng Việt
+  "Bridge chưa chạy — chạy bridge trước rồi bấm lại", kèm hướng dẫn 3
+  bước mở bridge (`BRIDGE_START_GUIDE`) — **không bao giờ hiện chữ
+  "Failed to fetch" thô cho user nữa**. `bridgeFetch()` (timeout 15 s
+  bằng `Promise.race`, cố ý không dùng AbortController — harness vm
+  không có nó), `checkBridgeHealth()`, `checkConnectionSteps()` (5 bước),
+  `isExtensionContext()` (có `chrome.runtime.id` không).
+- **Bridge:** `corsOrigin()` cho thêm `http://localhost:<port>` /
+  `http://127.0.0.1:<port>` và origin `null` (trả ACAO `'null'` + ghi
+  log), log rõ khi origin lạ bị từ chối; route mới
+  `GET /api/connection-test` (sau token gate, trả
+  `{ok, version, time, bridgeUrl}`) để dashboard kiểm tra nhanh.
+- **Dashboard:** `fetchJson`/`downloadBlob` dùng `bridgeFetch`;
+  `health()` dùng `bridgeFetch` + gọi `setLoginEnabled()`; mới
+  `setLoginEnabled()` (vô hiệu hoá 6 nút đăng nhập + hiện
+  `#bridgeDownNotice` kèm hướng dẫn khi bridge tắt),
+  `ensureBridgeUp()` (kiểm tra `/health` trước mọi nút đăng nhập:
+  Connect GitHub, Device Flow, PAT), `runConnectionDiagnostics()` (panel
+  "Chẩn đoán kết nối": bridge trả lời không → đúng cổng 17321 không →
+  CORS preflight có qua không → `/health` có ok không →
+  `/oauth/status` ra sao, kết quả từng bước bằng tiếng Việt). Boot phát
+  hiện mở ngoài extension → hiện banner `#outsideExtensionNotice`;
+  `refreshGithubState` coi `BRIDGE_UNREACHABLE` là trạng thái trống.
+  `dashboard.html`: thêm `#outsideExtensionNotice`,
+  `#bridgeDownNotice` (+ nút "Thử lại"), box chẩn đoán kết nối;
+  `<script src="bridge-client.js">` trước `dashboard.js`.
+- **Popup:** `fetchJson`/`downloadLocalZip` dùng `bridgeFetch`; mới
+  `showError()` (thông báo ngắn đã dịch + dòng hướng dẫn); `refresh()`
+  catch hiện hướng dẫn tiếng Việt; logout / auto-update toggle /
+  download-zip / data-action đều dùng `showError()`. `popup.html` nạp
+  `bridge-client.js` trước `popup.js`.
+- **Start script:** `.bat` + `.sh` viết lại — kiểm tra node có sẵn
+  không (báo rõ nếu chưa cài Node), `cd` đúng thư mục chứa script, báo
+  cổng đang dùng nếu trùng, Windows `pause` / macOS-Linux `read` để
+  cửa sổ không đóng ngay khi lỗi, in hướng dẫn mở extension sau khi
+  bridge chạy. Cả hai đều ghi v3.0.1.
+- **Version:** 3.0.1 ở cả 2 `manifest.json` + `bridge/package.json` +
+  header bridge + header dashboard/popup.
+
+### 7.3. File đã sửa / tạo (v3.0.1)
+
+- Sửa: `bridge/bridge-server.js`, `extension/dashboard.js`,
+  `extension/dashboard.html`, `extension/popup.js`,
+  `extension/popup.html`, `bridge/start-windows.bat`,
+  `bridge/start-mac-linux.sh`, `manifest.json`,
+  `extension/manifest.json`, `bridge/package.json`,
+  `tests/bridge-v2-test.js` (2 check version → 3.0.1 + nạp
+  `bridge-client.js` trước `dashboard.js` trong vm — xem 7.4),
+  `tests/bridge-v21-test.js`, `tests/bridge-v3-test.js` (check version →
+  3.0.1), `tests/extension-test.js` (nạp `bridge-client.js` trước,
+  thêm 17 check v3.0.1, `chrome.runtime.id` trong stub), `tests/run-all.js`
+  (thêm suite v3.0.1 — 7 suite), `README.md`, `docs/BRIDGE_V2.md`.
+- Mới: `extension/bridge-client.js`, `tests/bridge-v301-test.js`
+  (64 checks).
+
+### 7.4. Kiểm thử v3.0.1 — số liệu từng vòng
+
+`tests/bridge-v301-test.js` (node, mock GitHub cổng 17404 + bridge thật
+cổng 17395, cổng chết 17499, dashboard/popup nguyên vẹn trong vm,
+**không gọi api.github.com thật**; test "bridge tắt" dùng cổng riêng +
+kill bridge thật giữa chừng, không mock fetch nông):
+
+- **Chạy lẻ lần 1: 60/61** — 1 fail: banner ngoài-extension trong vm
+  (DOM shim của harness không có class HTML ban đầu; code thật đúng).
+  Sửa: dashboard boot đặt trạng thái banner **rõ ràng cả hai chiều**
+  bằng `classList.toggle('hidden', isExtensionContext())`.
+- **Chạy lẻ lần 2: 62/63** — 1 fail: test start-script (bridge con của
+  lần 1 bị mồ côi vì chỉ kill process `sh` cha, node con vẫn chiếm cổng
+  17393). Sửa test: spawn script với process group riêng (`detached`)
+  và kill cả group. Không phải lỗi code sản phẩm.
+- **Chạy lẻ lần 3: 64/64 pass** — translate `Failed to fetch` →
+  `BRIDGE_UNREACHABLE` + tiếng Việt (không chứa "Failed to fetch"),
+  `bridgeFetch` cổng chết, CORS OPTIONS (chrome-extension/localhost/null
+  cho phép, origin https lạ bị từ chối), `/api/connection-test`
+  200/401, `checkConnectionSteps` live, kill + restart bridge, dashboard
+  vm cổng chết (nút đăng nhập bị vô hiệu hoá + notice hiện + log tiếng
+  Việt + click CONNECT GITHUB bị chặn với hướng dẫn), popup vm cổng
+  chết, start script (node thiếu → exit 1 + thông báo rõ; node có →
+  bridge thật chạy + `/health` v3.0.1), login diagnostics vẫn pass khi
+  bridge chạy.
+- **`node tests/run-all.js` vòng 1: FAILED lần đầu, rồi ALL SUITES
+  PASSED sau khi sửa harness** — nguyên nhân fail: (a) bridge cũ còn
+  sót chiếm cổng 17399 từ lần chạy trước bị giết giữa chừng (không phải
+  lỗi code), (b) **bug thật trong harness**: `bridge-v2-test.js` nạp
+  `dashboard.js` trong vm mà không nạp `bridge-client.js` trước →
+  `ReferenceError: isExtensionContext is not defined` ở boot. Sửa
+  harness (nạp `bridge-client.js` trước + stub `chrome.runtime.id`),
+  chạy lại: **ALL SUITES PASSED** — validate-manifest 18/18,
+  load-from-root 7/7, bridge-v2 58/58, bridge-v21 107/107, bridge-v3
+  108/108, bridge-v301 64/64, extension-test 93/93 (76 cũ + 17 mới
+  v3.0.1), không còn listener sót sau khi chạy.
+- **`node tests/run-all.js` vòng 2: ALL SUITES PASSED** — số liệu giống
+  hệt vòng 1.
+
+### 7.5. User cần làm trên máy tính của mình
+
+1. **Mở bridge TRƯỚC** rồi mới đăng nhập: Windows đúp
+   `bridge/start-windows.bat`; macOS/Linux chạy
+   `bridge/start-mac-linux.sh`. Đợi terminal hiện `Listening:
+   http://127.0.0.1:17321` + đèn trong extension chuyển xanh.
+2. Nếu bấm đăng nhập mà nút bị mờ + hiện khung "Bridge chưa chạy":
+   làm theo 3 bước trong khung đó (mở bridge → đợi đèn xanh → bấm
+   "Thử lại"), đừng bấm đăng nhập khi đèn còn đỏ.
+3. Nếu vẫn lỗi: bấm **"Chẩn đoán kết nối"** trong dashboard, chụp màn
+   hình 5 bước đó gửi lại — bước nào đỏ thì biết đúng chỗ hỏng.
+4. Nhớ: đăng nhập GitHub vẫn cần làm **trên trang github.com** (OAuth /
+   Device Flow) hoặc dán **token PAT** — không gõ mật khẩu GitHub vào
+   extension (xem README mục 6).
+
+### 7.6. Chưa kiểm chứng bằng tay
+
+- Toàn bộ UI v3.0.1 trên Chrome thật: nút đăng nhập bị vô hiệu hoá khi
+  bridge tắt, banner ngoài-extension, panel "Chẩn đoán kết nối", start
+  script đúp chuột trên Windows thật.
+- Đăng nhập bằng tài khoản GitHub thật trên github.com thật (chỉ mock
+  local) — vẫn là bước user phải tự làm (mục 7.5).

@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.0.0
+ * v3.0.1
  *
  * A dependency-free local bridge (Node >= 18, only built-in modules) that
  * exposes two things to the companion Chrome extension:
@@ -81,7 +81,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
 
-const VERSION = '3.0.0';
+const VERSION = '3.0.1';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -349,8 +349,24 @@ function corsOrigin(req) {
   if (origin.startsWith('chrome-extension://') || origin.startsWith('moz-extension://')) {
     return origin;
   }
+  // v3.0.1: the dashboard can also be served from a local static server
+  // while debugging (http://localhost:<port> / http://127.0.0.1:<port>),
+  // and it is often opened directly as a local file (Origin: null).
+  // Both are allowed — the bearer token is still required for every
+  // /api route, so an unknown page cannot do anything without it.
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return origin;
+  }
+  if (origin === 'null') {
+    log('CORS: allowing null origin (dashboard opened as a local file — file://). Sign-in still requires the bridge token.');
+    return 'null';
+  }
   // Requests without an Origin header (curl, the extension's own fetch in some
   // contexts) are allowed; the bearer token is still required.
+  if (!origin) return '';
+  // v3.0.1: log rejected origins so a CORS block is diagnosable instead
+  // of a silent "Failed to fetch" on the extension side.
+  log('CORS: rejected origin ' + origin + ' — only the extension, localhost and file:// pages may call this bridge.');
   return '';
 }
 
@@ -1559,6 +1575,14 @@ async function handle(req, res) {
 
   if (!tokenMatches(req.headers.authorization)) {
     return send(req, res, 401, { error: 'Unauthorized: invalid or missing bridge token' });
+  }
+
+  // v3.0.1: connection test — a preflighted, authenticated request the
+  // dashboard uses to prove CORS + the bridge token work end to end.
+  // (If /health answers but this fails with a network error in the
+  // browser, the dashboard is being blocked by CORS.)
+  if (route === '/api/connection-test' && req.method === 'GET') {
+    return send(req, res, 200, { ok: true, version: VERSION, time: new Date().toISOString(), bridgeUrl: `http://${HOST}:${PORT}` });
   }
 
   let body = {};

@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.0.0
+# PixiJS GitHub Desktop Sync — v3.0.1
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -95,7 +95,7 @@ cd bridge
 Khi chạy đúng, terminal sẽ hiện tương tự:
 
 ```
-PixiJS GitHub Bridge v3.0.0
+PixiJS GitHub Bridge v3.0.1
 Listening: http://127.0.0.1:17321
 Token file: bridge/.bridge-token
 TOKEN:      ab12cd34ef56... (token của bạn)
@@ -482,8 +482,8 @@ Extention-github-desktop/
 ├── README.md                      # File này
 ├── .gitignore                     # .bridge-token, .bridge-state.json, .github-config.json, ...
 ├── bridge/
-│   ├── bridge-server.js           # Bridge v3.0: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3
-│   ├── package.json               # version 3.0.0, scripts start/test/test:v21/test:v3/test:all
+│   ├── bridge-server.js           # Bridge v3.0.1: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3 + connection-test + CORS localhost/null
+│   ├── package.json               # version 3.0.1, scripts start/test/test:v21/test:v3/test:v301/test:all
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   └── start-windows.bat          # Chạy bridge (Windows)
 ├── extension/
@@ -492,15 +492,17 @@ Extention-github-desktop/
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 6 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 7 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
 │   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
 │   ├── bridge-v3-test.js          # Test v3.0: chẩn đoán đăng nhập + zip + API v3 + git local mới
-│   ├── extension-test.js          # Test UI v3.0 (cần bridge chạy)
+│   ├── bridge-v301-test.js        # Test v3.0.1: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
+│   ├── bridge-client.js           # (nằm ở extension/) helper fetch tập trung: dịch lỗi mạng sang tiếng Việt
+│   ├── extension-test.js          # Test UI v3.0.1 (cần bridge chạy)
 │   ├── validate-manifest.js       # Kiểm tra cả 2 manifest
 │   └── load-from-root-test.js     # Kiểm tra Load unpacked từ root/extension
 └── docs/
-    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0 + số liệu test
+    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0/v3.0.1 + số liệu test
 ```
 
 ---
@@ -528,6 +530,42 @@ Extention-github-desktop/
 
 ## 13. Xử lý lỗi thường gặp
 
+### "ERROR: Failed to fetch" khi bấm đăng nhập (v3.0.1)
+
+**Dấu hiệu:** bấm CONNECT GITHUB / Device Flow / PAT thì báo
+`Failed to fetch` (từ v3.0.1 extension sẽ báo tiếng Việt thay cho dòng
+này, nhưng nguyên nhân thì như nhau).
+
+**Nguyên nhân số 1 (gần như luôn đúng): bridge chưa chạy.** `Failed to
+fetch` nghĩa là trình duyệt không nhận được phản hồi nào từ bridge —
+thường vì terminal chạy bridge đã tắt, hoặc bạn chưa chạy bridge lần nào.
+
+**Kiểm tra theo thứ tự:**
+
+1. **Mở bridge trước:** Windows đúp `bridge/start-windows.bat`;
+   macOS/Linux chạy `bridge/start-mac-linux.sh`. Đợi terminal hiện
+   `Listening: http://127.0.0.1:17321`.
+2. **Kiểm tra bridge có nghe không:** mở trình duyệt, vào
+   `http://127.0.0.1:17321/health` — phải thấy JSON `{"ok":true,
+   "version":"3.0.1", ...}`. Không thấy → bridge chưa chạy (hoặc sai
+   cổng, xem bước 4).
+3. **Nhìn đèn trong extension:** đèn phải xanh mới bấm đăng nhập. Từ
+   v3.0.1, khi bridge tắt thì các nút đăng nhập **bị mờ + hiện khung
+   "Bridge chưa chạy"** kèm 3 bước mở bridge và nút **"Thử lại"** —
+   làm theo khung đó.
+4. **Sai cổng:** nếu bạn chạy bridge bằng `BRIDGE_PORT` khác 17321 thì
+   sửa **Bridge URL** trong popup cho khớp (ví dụ
+   `http://127.0.0.1:18080`).
+5. **Vẫn lỗi:** bấm **"Chẩn đoán kết nối"** trong dashboard — nó kiểm
+   tra từng bước (bridge trả lời không → đúng cổng không → CORS có qua
+   không → `/health` có ok không → `/oauth/status` ra sao) và hiện kết
+   quả từng bước bằng tiếng Việt. Chụp màn hình 5 bước đó nếu cần hỏi
+   thêm.
+6. **Mở dashboard ngoài extension:** nếu bạn mở `dashboard.html`
+   trực tiếp từ file (`file://`) thì trình duyệt chặn fetch về bridge —
+   dashboard sẽ hiện banner cảnh báo. Luôn mở dashboard từ **popup của
+   extension** (bấm icon extension → "Mở Dashboard").
+
 ### "Bridge disconnected" / đèn đỏ — bridge chưa chạy
 
 **Dấu hiệu:** popup/dashboard đỏ, bấm gì cũng báo lỗi kết nối.
@@ -536,7 +574,7 @@ Extention-github-desktop/
    (mục 3).
 2. Kiểm tra bridge có đang nghe không: mở trình duyệt, vào
    `http://127.0.0.1:17321/health` — phải thấy JSON `{"ok":true,
-   "version":"2.1.0", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
+   "version":"3.0.1", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
 3. Nếu dùng cổng khác (biến `BRIDGE_PORT`): sửa **Bridge URL** trong popup
    cho khớp (ví dụ `http://127.0.0.1:18080`).
 4. Bấm **Reconnect** trong popup/dashboard.
@@ -686,7 +724,8 @@ node tests/load-from-root-test.js    # 7 checks: Load unpacked từ root và t�
 node tests/bridge-v2-test.js         # 58 checks: mock GitHub + bridge thật + dashboard trong vm
 node tests/bridge-v21-test.js        # 107 checks: push/pull trên repo git thật + OAuth Web Flow + auto-sync
 node tests/bridge-v3-test.js         # 108 checks: chẩn đoán đăng nhập + PAT guard + zip + API v3 + git local mới
-node tests/extension-test.js         # 76 checks: Git local + UI v3.0 (CẦN bridge đang chạy ở 17321)
+node tests/bridge-v301-test.js       # 64 checks: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
+node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN bridge đang chạy ở 17321)
 ```
 
 ### Kết quả đã chạy (2026-11-23, 2 vòng liên tiếp — xem chi tiết trong `docs/BRIDGE_V2.md`)
@@ -696,7 +735,8 @@ node tests/extension-test.js         # 76 checks: Git local + UI v3.0 (CẦN bri
 | `bridge-v2-test.js` | 58 passed, 0 failed | 58 passed, 0 failed |
 | `bridge-v21-test.js` | 107 passed, 0 failed | 107 passed, 0 failed |
 | `bridge-v3-test.js` | 108 passed, 0 failed | 108 passed, 0 failed |
-| `extension-test.js` | ALL CHECKS PASSED (76) | ALL CHECKS PASSED (76) |
+| `bridge-v301-test.js` | 64 passed, 0 failed | 64 passed, 0 failed |
+| `extension-test.js` | ALL CHECKS PASSED (93) | ALL CHECKS PASSED (93) |
 | `validate-manifest.js` | 18/18 | 18/18 |
 | `load-from-root-test.js` | 7/7 | 7/7 |
 
@@ -744,6 +784,17 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.0.1 (2026-11-23)** — Sửa lỗi `ERROR: Failed to fetch` khi đăng
+  nhập: helper fetch tập trung `extension/bridge-client.js` (mọi lỗi mạng
+  dịch thành `BRIDGE_UNREACHABLE` + thông báo tiếng Việt "Bridge chưa
+  chạy — chạy bridge trước rồi bấm lại", không bao giờ hiện "Failed to
+  fetch" thô); mọi nút đăng nhập kiểm tra `/health` trước, bridge tắt thì
+  nút bị vô hiệu hoá + hiện hướng dẫn mở bridge ngay tại chỗ; panel
+  "Chẩn đoán kết nối" kiểm tra 5 bước (bridge → cổng → CORS → `/health`
+  → `/oauth/status`); bridge thêm route `GET /api/connection-test` và
+  CORS cho `localhost` + origin `null`, log origin lạ; start script
+  kiểm tra node, giữ cửa sổ mở khi lỗi; banner cảnh báo khi mở dashboard
+  ngoài extension. Xem `docs/BRIDGE_V2.md` (mục v3.0.1) và README mục 13.
 - **v3.0.0 (2026-11-23)** — Sửa triệt để lỗi đăng nhập + Download .zip +
   thêm nhiều tính năng: chẩn đoán đăng nhập từng bước
   (`GET /api/github/login/diagnostics`, 6 check tiếng Việt), PAT chặn ngay

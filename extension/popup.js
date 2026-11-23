@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v3.0.0
+ * PixiJS GitHub Desktop Sync — popup v3.0.1
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
  * signed-in GitHub account (with its sign-in method and email), the
@@ -64,11 +64,23 @@ async function settings() {
 }
 
 async function fetchJson(url, options) {
-  const res = await fetch(url, options);
+  // v3.0.1: bridgeFetch (extension/bridge-client.js) translates every
+  // network failure into a Vietnamese BRIDGE_UNREACHABLE error — the
+  // raw browser "Failed to fetch" never reaches the user.
+  const res = await bridgeFetch(url, options);
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
   return data;
+}
+
+// v3.0.1: never show the browser's raw error text ("Failed to fetch")
+// in the popup — show the translated Vietnamese message, with the
+// detailed start guide on the detail line.
+function showError(err) {
+  const t = translateBridgeError(err);
+  $('message').textContent = t.short;
+  $('bridgeDetail').textContent = t.detail || '';
 }
 
 async function api(path, method = 'GET', body) {
@@ -174,7 +186,7 @@ async function downloadLocalZip() {
   $('message').textContent = 'Downloading ' + filename + '…';
   $('downloadZipBtn').disabled = true;
   try {
-    const res = await fetch(s.bridgeUrl + '/api/git/archive-zip', {
+    const res = await bridgeFetch(s.bridgeUrl + '/api/git/archive-zip', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.token },
       body: JSON.stringify({ ref }),
@@ -261,8 +273,9 @@ async function refresh() {
     }
     await showAheadBehind();
   } catch (_) {
-    setBridgeState('disconnected', 'Start the local bridge: node bridge/bridge-server.js');
-    $('message').textContent = 'Start the local bridge';
+    // v3.0.1: Vietnamese guidance instead of the raw "Failed to fetch".
+    setBridgeState('disconnected', BRIDGE_START_GUIDE);
+    $('message').textContent = BRIDGE_START_SHORT;
     $('repoName').textContent = 'No repository selected';
     $('branchName').textContent = '—';
     $('repoPath').textContent = 'Open Workspace to select a repository';
@@ -292,7 +305,7 @@ $('logout').onclick = async () => {
     showGithub(null);
     $('message').textContent = 'Signed out of GitHub';
   } catch (err) {
-    $('message').textContent = err.message;
+    showError(err);
   }
 };
 
@@ -306,7 +319,7 @@ $('autoUpdateToggle').onchange = async () => {
     $('message').textContent = enabled ? 'Auto-update ON' : 'Auto-update OFF';
   } catch (err) {
     $('autoUpdateToggle').checked = !enabled;
-    $('message').textContent = err.message;
+    showError(err);
   }
 };
 
@@ -319,7 +332,7 @@ $('downloadZipBtn').onclick = async () => {
   try {
     await downloadLocalZip();
   } catch (err) {
-    $('message').textContent = err.message;
+    showError(err);
   }
 };
 
@@ -337,7 +350,7 @@ document.querySelectorAll('[data-action]').forEach((button) => {
       }
       await refresh();
     } catch (err) {
-      $('message').textContent = err.message;
+      showError(err);
     }
   };
 });

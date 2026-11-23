@@ -56,10 +56,31 @@
     <h3>ĐĂNG NHẬP GITHUB</h3>
     <p class="hint">Chọn 1 trong 3 cách bên dưới. <b>Extension không bao giờ hỏi mật khẩu GitHub của bạn</b> — GitHub đã bỏ xác thực mật khẩu cho app bên thứ ba từ năm 2020, mật khẩu chỉ nhập trên chính trang github.com.</p>
 
+    <!-- v3.0.1: shown when this page is opened outside the extension
+         (file:// or a plain web page) — the browser then blocks every
+         bridge call with CORS, and sign-in fails with "Failed to fetch". -->
+    <div id="outsideExtensionNotice" class="pat-warning hidden">⚠️ Trang này đang mở <b>ngoài extension</b> (file trực tiếp hoặc trình duyệt thường). Trình duyệt sẽ chặn mọi kết nối tới bridge (CORS) nên đăng nhập không hoạt động ở đây. Mở dashboard từ extension: bấm icon extension → <b>OPEN FULL WORKSPACE</b>.</div>
+
+    <!-- v3.0.1: shown while the bridge is down — sign-in buttons are
+         disabled and this box tells the user how to start the bridge. -->
+    <div id="bridgeDownNotice" class="pat-warning hidden">
+      <b>⚠️ Bridge chưa chạy — chưa đăng nhập được.</b>
+      <div id="bridgeDownNoticeText" style="white-space:pre-line;margin-top:6px"></div>
+      <button id="bridgeRetryBtn" class="full" style="margin-top:8px">THỬ LẠI</button>
+    </div>
+
     <div class="diag-box">
       <div class="row"><h3>KIỂM TRA ĐĂNG NHẬP</h3><button id="diagBtn" class="mini">Kiểm tra</button></div>
       <p id="diagStatus" class="hint">Bấm "Kiểm tra" để xem từng bước đăng nhập: bridge, token, OAuth App, tài khoản — bước nào hỏng sẽ hiện cách sửa.</p>
       <div id="diagList"></div>
+    </div>
+
+    <!-- v3.0.1: connection diagnostics — one click checks bridge,
+         port, CORS preflight, /health and /oauth/status step by step. -->
+    <div class="diag-box">
+      <div class="row"><h3>KIỂM TRA KẾT NỐI</h3><button id="connDiagBtn" class="mini">Kiểm tra kết nối</button></div>
+      <p id="connDiagStatus" class="hint">Bấm "Kiểm tra kết nối" để xem từng bước: bridge có trả lời không, đúng cổng 17321 không, CORS có qua không, /health và /oauth/status ra sao — bước nào hỏng sẽ hiện cách sửa.</p>
+      <div id="connDiagList"></div>
     </div>
 
     <!-- Cách 1: OAuth Web Flow -->
@@ -628,6 +649,7 @@
 </section>
 </main>
 
+<script src="bridge-client.js"></script>
 <script src="dashboard.js"></script>
 </body>
 </html>

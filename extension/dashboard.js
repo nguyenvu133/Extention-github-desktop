@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.0.0
+ * PixiJS GitHub Desktop Sync — dashboard v3.0.1
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
@@ -129,7 +129,10 @@ const TOKEN_FORMAT_HINT = 'Đây không phải token — token bắt đầu bằ
 /* ------------------------------------------------------------------ */
 
 async function fetchJson(url, options) {
-  const res = await fetch(url, options);
+  // v3.0.1: bridgeFetch (extension/bridge-client.js) translates every
+  // network failure into a Vietnamese BRIDGE_UNREACHABLE error — the
+  // raw browser "Failed to fetch" never reaches the user.
+  const res = await bridgeFetch(url, options);
   let data = {};
   try { data = await res.json(); } catch (_) {}
   if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
@@ -158,7 +161,7 @@ async function gh(path, method = 'GET', body) {
 async function downloadBlob(path, method = 'GET', body, filename) {
   const c = await cfg();
   if (!c.token) throw new Error('Missing bridge token. Start the bridge and paste its token.');
-  const res = await fetch(c.bridgeUrl + path, {
+  const res = await bridgeFetch(c.bridgeUrl + path, {
     method,
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + c.token },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -201,13 +204,14 @@ function setBridgeState(state, detail) {
 async function health() {
   const c = await cfg();
   try {
-    const res = await fetch(c.bridgeUrl + '/health');
+    const res = await bridgeFetch(c.bridgeUrl + '/health', undefined, 8000);
     if (!res.ok) throw new Error('offline');
     const data = await res.json();
     healthFailures = 0;
 
     const wasDown = bridgeState !== 'connected';
     setBridgeState('connected');
+    setLoginEnabled(true);
     updateRateLimit(data.github && data.github.rateLimit);
 
     const repo = data.repository;
@@ -236,14 +240,17 @@ async function health() {
       await refreshGithubState().catch((err) => log('ERROR: ' + err.message));
     }
     return true;
-  } catch (_) {
+  } catch (err) {
     healthFailures += 1;
     // First failure while connected -> reconnecting (retries keep running).
     // Failure at boot -> disconnected (nothing ever worked yet).
+    // v3.0.1: login buttons are disabled while the bridge is down, so
+    // the user cannot click sign-in into a raw "Failed to fetch".
+    setLoginEnabled(false);
     if (bridgeState === 'connected' || healthFailures > 1) {
-      setBridgeState('reconnecting', `Bridge unreachable (attempt ${healthFailures}). Retrying…`);
+      setBridgeState('reconnecting', `Bridge không kết nối được (lần thử ${healthFailures}). Đang thử lại…`);
     } else {
-      setBridgeState('disconnected', 'Bridge offline. Start it with: node bridge/bridge-server.js');
+      setBridgeState('disconnected', BRIDGE_START_SHORT);
     }
     localConnected = false;
     stopEventStream();
@@ -357,6 +364,76 @@ async function reconnectNow() {
 }
 
 /* ------------------------------------------------------------------ */
+/* v3.0.1 — login gate + connection diagnostics (fix "Failed to fetch") */
+/* ------------------------------------------------------------------ */
+
+// v3.0.1: while the bridge is down, every sign-in button is disabled
+// and the login panel shows the 3-step start guide instead of letting
+// the user click sign-in into a raw "Failed to fetch".
+const LOGIN_BUTTON_IDS = ['oauthConnectBtn', 'deviceFlowBtn', 'loginPatBtn', 'oauthSaveBtn', 'diagBtn', 'connDiagBtn'];
+
+function setLoginEnabled(enabled) {
+  for (const id of LOGIN_BUTTON_IDS) {
+    const el = $(id);
+    if (el) el.disabled = !enabled;
+  }
+  const notice = $('bridgeDownNotice');
+  if (notice) {
+    notice.classList.toggle('hidden', enabled);
+    if (!enabled) $('bridgeDownNoticeText').textContent = BRIDGE_START_GUIDE;
+  }
+}
+
+// Throws the translated BRIDGE_UNREACHABLE error when the bridge does
+// not answer /health. Every sign-in entry point calls this first.
+async function ensureBridgeUp() {
+  const c = await cfg();
+  await checkBridgeHealth(c.bridgeUrl);
+  return true;
+}
+
+// v3.0.1 — one-click connection check: bridge reachable? right port?
+// CORS preflight? /health ok? /oauth/status? Renders one row per step
+// (same .diag-row style as the login diagnostics). Never throws.
+async function runConnectionDiagnostics() {
+  const list = $('connDiagList');
+  const statusEl = $('connDiagStatus');
+  list.innerHTML = '';
+  statusEl.textContent = 'Đang kiểm tra…';
+  const c = await cfg();
+  let steps;
+  try {
+    steps = await checkConnectionSteps(c.bridgeUrl, c.token);
+  } catch (err) {
+    statusEl.textContent = 'Không kiểm tra được: ' + translateBridgeError(err, c.bridgeUrl).short;
+    return null;
+  }
+  const failed = steps.filter((s) => !s.ok);
+  statusEl.textContent = failed.length
+    ? `${failed.length}/${steps.length} bước chưa đạt — xem cách sửa bên dưới.`
+    : 'Tất cả các bước đều đạt ✓ — bridge đã sẵn sàng, thử đăng nhập lại.';
+  for (const s of steps) {
+    const row = document.createElement('div');
+    row.className = 'diag-row' + (s.ok ? ' ok' : ' bad');
+    const mark = document.createElement('b');
+    mark.textContent = s.ok ? '✓' : '✗';
+    const body = document.createElement('span');
+    const label = document.createElement('b');
+    label.textContent = s.label || s.key || 'check';
+    body.append(label);
+    if (s.detail) body.append(document.createTextNode(' — ' + s.detail));
+    if (!s.ok && s.fix) {
+      const fix = document.createElement('small');
+      fix.textContent = 'Cách sửa: ' + s.fix;
+      body.append(fix);
+    }
+    row.append(mark, body);
+    list.append(row);
+  }
+  return steps;
+}
+
+/* ------------------------------------------------------------------ */
 /* GitHub sign-in                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -431,9 +508,12 @@ async function refreshGithubState() {
       setRepoListEmpty('Sign in to GitHub to list your repositories.');
     }
   } catch (err) {
-    if (/not connected|Missing bridge token/i.test(err.message)) {
+    // v3.0.1: a dead bridge is now a translated BRIDGE_UNREACHABLE
+    // error (Vietnamese) instead of the raw "Failed to fetch" — treat
+    // it like "not connected" and show the empty state, not a crash.
+    if (err.code === BRIDGE_UNREACHABLE_CODE || /not connected|Missing bridge token|Bridge chưa chạy/i.test(err.message)) {
       showUser(null);
-      setRepoListEmpty('Sign in to GitHub to list your repositories.');
+      setRepoListEmpty('Bridge chưa chạy — chạy bridge trước rồi đăng nhập GitHub (xem hướng dẫn trong khung "Bridge chưa chạy" ở panel đăng nhập).');
     } else {
       throw err;
     }
@@ -444,6 +524,9 @@ async function refreshGithubState() {
 let devicePollTimer = null;
 
 async function loginWithPat() {
+  // v3.0.1: check the bridge first — a dead bridge used to surface as
+  // a raw "Failed to fetch" from this very call.
+  await ensureBridgeUp();
   const token = $('patInput').value.trim();
   if (!token) throw new Error('Paste a Personal Access Token first');
   // v3.0: check the shape on the client before sending anything. Users
@@ -538,6 +621,8 @@ function updateDeviceCountdown() {
 }
 
 async function startDeviceFlow() {
+  // v3.0.1: check the bridge first (see loginWithPat).
+  await ensureBridgeUp();
   let res;
   try {
     res = await gh('/auth/device/start', 'POST', {});
@@ -625,6 +710,8 @@ async function loadOAuthStatus() {
 }
 
 async function saveOAuthConfig() {
+  // v3.0.1: check the bridge first (see loginWithPat).
+  await ensureBridgeUp();
   const clientId = $('oauthClientId').value.trim();
   const clientSecret = $('oauthClientSecret').value.trim();
   if (!clientId) throw new Error('Paste the Client ID from your GitHub OAuth App first');
@@ -642,6 +729,8 @@ function stopOAuthPolling() {
 }
 
 async function startOAuthWeb() {
+  // v3.0.1: check the bridge first (see loginWithPat).
+  await ensureBridgeUp();
   if (!oauthConfigured) {
     // Refresh the status first — the user may just have saved the config
     // in another tab, or the bridge may have one from its environment.
@@ -2417,6 +2506,8 @@ $('patInput').oninput = () => {
   }
 };
 $('diagBtn').onclick = () => run('Login diagnostics', loadLoginDiagnostics);
+$('connDiagBtn').onclick = () => run('Connection diagnostics', runConnectionDiagnostics);
+$('bridgeRetryBtn').onclick = () => run('Reconnect', reconnectNow);
 
 $('globalSearch').oninput = () => { if (allRepos.length) renderRepos(); };
 $('repoSearch').oninput = () => renderRepos();
@@ -2658,10 +2749,20 @@ $('copyPath').onclick = () => run('Repository path copied', async () => {
   updateNotifBadge();
 
   showView('repos');
+  // v3.0.1: the dashboard only works inside the extension. Opened as a
+  // plain file (file://) or a normal web page, the browser enforces
+  // CORS against the bridge and every sign-in fails with "Failed to
+  // fetch" — say so clearly instead of letting the user guess. The
+  // toggle sets the state explicitly both ways (not just "remove when
+  // outside") so the banner can never be stuck in the wrong state.
+  $('outsideExtensionNotice').classList.toggle('hidden', isExtensionContext());
+  // v3.0.1: sign-in stays disabled until the first health check proves
+  // the bridge is up.
+  setLoginEnabled(false);
   startHealthPoll();
   const ok = await health();
   if (!ok) {
-    log('Bridge offline. Start it with: node bridge/bridge-server.js — this page will reconnect automatically.');
+    log('Bridge offline. ' + BRIDGE_START_SHORT + ' Trang này sẽ tự kết nối lại khi bridge chạy.');
     return;
   }
   startEventStream();

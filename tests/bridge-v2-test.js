@@ -452,6 +452,7 @@ function makeChrome(store) {
     runtime: {
       getManifest: () => ({ version: '2.0.0' }),
       getURL: (p) => 'chrome-extension://test/' + p,
+      id: 'test-extension-id', // v3.0.1: isExtensionContext() needs this
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },
     },
@@ -478,6 +479,9 @@ const DASHBOARD_IDS = [
 ];
 
 function runDashboard(store) {
+  // v3.0.1: bridge-client.js must load BEFORE dashboard.js so its
+  // helpers (isExtensionContext, bridgeFetch, ...) are global.
+  const clientCode = fs.readFileSync(path.join(EXT, 'bridge-client.js'), 'utf8');
   const code = fs.readFileSync(path.join(EXT, 'dashboard.js'), 'utf8');
   const document = makeDocument(DASHBOARD_IDS);
   const sandbox = {
@@ -498,6 +502,7 @@ function runDashboard(store) {
   if (typeof EventSource !== 'undefined') sandbox.EventSource = EventSource;
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  vm.runInContext(clientCode, sandbox, { filename: 'bridge-client.js' });
   vm.runInContext(code, sandbox, { filename: 'dashboard.js' });
   return { document, sandbox };
 }
@@ -544,7 +549,7 @@ async function waitFor(fn, timeoutMs, label) {
   try {
     /* --- 1. health --- */
     const health = await waitForHealth(10000);
-    check('health ok + version 3.0.0', health.ok === true && health.version === '3.0.0', JSON.stringify(health).slice(0, 120));
+    check('health ok + version 3.0.1', health.ok === true && health.version === '3.0.1', JSON.stringify(health).slice(0, 120));
     check('health reports github not authed', health.github && health.github.authed === false, JSON.stringify(health.github));
     check('health reports Device Flow available (test client id)', health.github && health.github.deviceFlowAvailable === true);
     check('health reports auto-update off by default', health.autoUpdate && health.autoUpdate.enabled === false);
@@ -676,7 +681,7 @@ async function waitFor(fn, timeoutMs, label) {
         req.on('error', rejectSse);
       });
       await sleep(1200);
-      check('SSE hello event received', sseEvents.some((e) => e.type === 'hello' && e.data.version === '3.0.0'), JSON.stringify(sseEvents).slice(0, 160));
+      check('SSE hello event received', sseEvents.some((e) => e.type === 'hello' && e.data.version === '3.0.1'), JSON.stringify(sseEvents).slice(0, 160));
       commitShaByRepo['octocat/beta'] = 'eeee5555555555555555555555555555555555';
       await bfetch('/api/github/refresh', { method: 'POST', body: {} });
       await sleep(1500);

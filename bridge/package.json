@@ -12,7 +12,8 @@
     "test": "node ../tests/bridge-v2-test.js",
     "test:all": "node ../tests/run-all.js",
     "test:v21": "node ../tests/bridge-v21-test.js",
-    "test:v3": "node ../tests/bridge-v3-test.js"
+    "test:v3": "node ../tests/bridge-v3-test.js",
+    "test:v301": "node ../tests/bridge-v301-test.js"
   },
-  "version": "3.0.0"
+  "version": "3.0.1"
 }
