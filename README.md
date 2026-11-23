@@ -2,7 +2,7 @@
 
 A Chrome extension (Manifest V3) plus a local Node.js bridge that runs **real Git commands** on a repository on your own machine. It is a working local Git client in the browser — not a client for GitHub Desktop's private internals.
 
-**Version 1.0.1**
+**Version 1.0.2**
 
 ---
 
@@ -38,7 +38,7 @@ node bridge-server.js
 The first run creates `bridge/.bridge-token` (mode `0600`) and prints the token:
 
 ```
-PixiJS Git Bridge v1.0.1
+PixiJS Git Bridge v1.0.2
 Listening:  http://127.0.0.1:17321
 TOKEN:      8b6454027bbe8876cc54f194a72891b4fc6ab37a70c3f3f8
 ```
@@ -56,12 +56,12 @@ To use a different port: `BRIDGE_PORT=17322 node bridge-server.js` (then change 
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
-4. Select the **`extension/`** folder — not the project root
+4. Select the **`extension/`** folder — or the project root, both work since v1.0.2 (there is a `manifest.json` in each; picking the project root used to fail with *"Manifest file is missing or unreadable"* because Chrome only looks for `manifest.json` in the exact folder you pick)
 5. Click the extension icon, paste the token, click **SAVE TOKEN**
 6. Click **OPEN FULL WORKSPACE**
 7. Enter the full path to your local repository and click **CONNECT REPOSITORY**
 
-Chrome cannot install an extension directly from a ZIP in Developer mode — extract it and load the `extension/` folder.
+Chrome cannot install an extension directly from a ZIP in Developer mode — extract it first, then load a folder. Do not pick the `.zip` file itself, and do not pick a folder that contains no `manifest.json` (for example the unextracted download, or `bridge/`).
 
 ---
 
@@ -123,6 +123,13 @@ node tests/extension-test.js
 
 The harness loads `extension/dashboard.js` and `extension/popup.js` unmodified into a minimal DOM + `chrome.*` shim and drives them against the live bridge: connect, status, diff, stage, commit, history, branches, and the bad-token error path.
 
+Manifest / load checks (no bridge needed):
+
+```bash
+node tests/validate-manifest.js   # both manifest.json files parse and every referenced file exists
+node tests/load-from-root-test.js # dashboard opens correctly whether loaded from the root or from extension/
+```
+
 ---
 
 ## Known limits
@@ -138,6 +145,7 @@ The harness loads `extension/dashboard.js` and `extension/popup.js` unmodified i
 
 | Symptom | Fix |
 |---|---|
+| **Manifest file is missing or unreadable** | Chrome looked in the exact folder you picked and found no `manifest.json` there. Extract the ZIP first, then pick a folder that contains `manifest.json` — `extension/` or the project root (both work since v1.0.2). Never pick the `.zip` file, `bridge/`, or a folder one level above the project |
 | **BRIDGE DISCONNECTED** | Keep the Node terminal open; check `http://127.0.0.1:17321/health` |
 | **Token rejected** | Copy the exact token printed by the bridge (or from `bridge/.bridge-token`) |
 | **Port already in use** | Another bridge is running — close it, or set `BRIDGE_PORT` |

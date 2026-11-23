@@ -136,7 +136,7 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '1.0.1' }),
+      getManifest: () => ({ version: '1.0.2' }),
       getURL: (p) => 'chrome-extension://test/' + p,
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },
@@ -283,7 +283,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
     check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
       p.getElementById('message').textContent);
-    check('popup version from manifest', p.getElementById('version').textContent === 'v1.0.1',
+    check('popup version from manifest', p.getElementById('version').textContent === 'v1.0.2',
       p.getElementById('version').textContent);
     check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
       p.getElementById('repoName').textContent);

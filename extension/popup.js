@@ -7,6 +7,21 @@ function normalizeBase(url) {
   return String(url || '').trim().replace(/\/+$/, '') || DEFAULTS.bridgeUrl;
 }
 
+// Same root-vs-extension/ logic as background.js: popup.html lives
+// beside dashboard.html, so the dashboard path follows the folder
+// popup.html itself was loaded from. Falls back to dashboard.html
+// when the page URL is unavailable (e.g. in the Node test harness).
+function dashboardUrl() {
+  try {
+    const href = (typeof location !== 'undefined' && location.href) || '';
+    const path = href.split('?')[0].split('#')[0];
+    const dir = path.replace(/[^/]*$/, '').replace(/^(?:[a-z-]+:\/\/[^/]+\/)?/, '');
+    return chrome.runtime.getURL(dir + 'dashboard.html');
+  } catch (_) {
+    return chrome.runtime.getURL('dashboard.html');
+  }
+}
+
 async function settings() {
   const s = await chrome.storage.local.get(DEFAULTS);
   return {
@@ -80,7 +95,7 @@ $('saveToken').onclick = async () => {
 };
 
 $('open').onclick = () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+  chrome.tabs.create({ url: dashboardUrl() });
   window.close();
 };
 

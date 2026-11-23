@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git Bridge
- * v1.0.1
+ * v1.0.2
  *
  * A dependency-free local HTTP bridge that exposes a small, safe subset of
  * Git operations to the companion Chrome extension.
@@ -23,7 +23,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
