@@ -32,7 +32,7 @@ function makeChrome() {
     chrome: {
       storage: { local: { async get(d) { return { ...d }; }, async set() {} } },
       runtime: {
-        getManifest: () => ({ version: '1.0.2' }),
+        getManifest: () => ({ version: '2.0.0' }),
         getURL: (p) => 'chrome-extension://test/' + p,
         onInstalled: { addListener: (fn) => listeners.installed.push(fn) },
         onMessage: { addListener: (fn) => listeners.message.push(fn) },
@@ -70,7 +70,23 @@ for (const [label, pathname, expected] of [
 function runPopup(href) {
   const ctx = makeChrome();
   const els = new Map();
-  const el = () => ({ className: '', textContent: '', value: '', dataset: {}, onclick: null });
+  const el = () => {
+    const classes = new Set();
+    return {
+      className: '', textContent: '', value: '', dataset: {}, onclick: null,
+      onchange: null, oninput: null, checked: false, src: '', alt: '',
+      classList: {
+        add: (...names) => { for (const n of names) classes.add(n); },
+        remove: (...names) => { for (const n of names) classes.delete(n); },
+        toggle: (name, force) => {
+          const want = force === undefined ? !classes.has(name) : !!force;
+          if (want) classes.add(name); else classes.delete(name);
+          return want;
+        },
+        contains: (name) => classes.has(name),
+      },
+    };
+  };
   const document = {
     getElementById: (id) => { if (!els.has(id)) els.set(id, el()); return els.get(id); },
     querySelectorAll: () => [],
@@ -79,11 +95,13 @@ function runPopup(href) {
     document,
     chrome: ctx.chrome,
     console,
-    fetch: async () => ({ ok: true, json: async () => ({ version: '1.0.2', repository: null }) }),
+    fetch: async () => ({ ok: true, json: async () => ({ version: '2.0.0', repository: null }) }),
     location: { href },
     window: { close() {} },
     setTimeout,
     clearTimeout,
+    setInterval,
+    clearInterval,
   };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
@@ -106,4 +124,5 @@ setTimeout(() => {
     process.exit(1);
   }
   console.log('\nload-from-root-test: all checks passed\n');
+  process.exit(0); // popup.js v2 runs a 10 s reconnect interval; exit explicitly.
 }, 200);

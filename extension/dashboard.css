@@ -1,69 +1,134 @@
+/* PixiJS GitHub Desktop Sync — dashboard v2.0.0 (GitHub-dark inspired) */
 :root{color-scheme:dark}
 *{box-sizing:border-box}
-body{margin:0;background:#0e1520;color:#e6edf7;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+body{margin:0;background:#0d1117;color:#e6edf3;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+.hidden{display:none!important}
 
-header{height:68px;background:#151e2b;border-bottom:1px solid #2b394b;display:flex;align-items:center;padding:0 22px;gap:28px;position:sticky;top:0;z-index:2}
-.brand{display:flex;align-items:center;gap:11px;min-width:360px}
-.mark{width:36px;height:36px;background:#347cf0;border-radius:9px;display:grid;place-items:center;font-size:21px;font-weight:bold}
-.brand b{letter-spacing:1px;font-size:12px}
-.brand small{display:block;color:#8294ab;font-size:9px;margin-top:4px;letter-spacing:1px}
-.connect{display:flex;align-items:center;gap:8px;color:#8ca0b8;font-size:10px;letter-spacing:1px}
-.connect i{width:8px;height:8px;border-radius:50%;background:#d69c39;transition:background .2s}
-.connect i.ok{background:#39c78b}
-.connect i.off{background:#d9534f}
-nav{margin-left:auto;display:flex;gap:8px}
-
-button{cursor:pointer;background:#263449;border:1px solid #3a4c64;color:#eaf1fa;border-radius:6px;padding:9px 13px;font-size:11px;font-family:inherit}
-button:hover{filter:brightness(1.18)}
+button{cursor:pointer;background:#21262d;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 12px;font-size:12px;font-family:inherit}
+button:hover{background:#30363d}
 button:active{transform:translateY(1px)}
-button.blue{background:#347cf0;border-color:#347cf0}
+button.blue{background:#1f6feb;border-color:#1f6feb;color:#fff}
+button.blue:hover{background:#388bfd}
+button.mini{padding:4px 9px;font-size:11px}
+button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
 .full{width:100%;margin-top:10px}
 
-main{display:grid;grid-template-columns:330px minmax(500px,1fr);gap:16px;padding:16px;max-width:1600px;margin:auto}
+/* ---------- header (github.com top bar) ---------- */
+.gh-header{height:62px;background:#010409;border-bottom:1px solid #21262d;display:flex;align-items:center;padding:0 16px;gap:16px;position:sticky;top:0;z-index:5}
+.brand{display:flex;align-items:center;gap:10px;min-width:250px}
+.mark{width:32px;height:32px;background:#1f6feb;border-radius:50%;display:grid;place-items:center;font-size:18px;font-weight:900;color:#fff}
+.brand b{letter-spacing:.5px;font-size:12px}
+.brand small{display:block;color:#8b949e;font-size:9px;margin-top:2px;letter-spacing:1px}
+.gh-search{flex:0 1 320px}
+.gh-search input{background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:6px 10px;font-size:12px;width:100%}
+.gh-nav{display:flex;gap:4px}
+.gh-nav button{background:transparent;border:0;color:#e6edf3;padding:7px 12px;border-radius:6px;font-weight:600}
+.gh-nav button.active{background:#1f6feb}
+.connect{display:flex;align-items:center;gap:8px;color:#8b949e;font-size:10px;letter-spacing:.5px;margin-left:auto}
+.connect i{width:8px;height:8px;border-radius:50%;background:#d29922;transition:background .2s;flex:none}
+.connect i.ok{background:#3fb950}
+.connect i.off{background:#f85149}
+.connect i.reconnecting{background:#d29922;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.user-chip{display:flex;align-items:center;gap:8px}
+.user-chip .avatar{width:28px;height:28px;border-radius:50%;background:#21262d}
+.user-chip span{font-weight:600;font-size:12px}
+
+/* ---------- layout ---------- */
+main{display:grid;grid-template-columns:330px minmax(520px,1fr);gap:16px;padding:16px;max-width:1600px;margin:auto}
 aside,.content{display:flex;flex-direction:column;gap:14px;min-width:0}
 
-.panel{background:#172231;border:1px solid #2a394d;border-radius:9px;padding:14px;box-shadow:0 5px 18px #0002}
-.panel h3,.panel h2{font-size:11px;letter-spacing:1px;margin:0 0 13px;color:#cbd7e7}
-.panel h2{font-size:12px;margin:0}
-.row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:16px}
+.panel h3,.panel h2{font-size:12px;margin:0 0 12px;color:#e6edf3}
+.panel h2{font-size:14px;margin:0}
+.panel h2 .count{color:#8b949e;font-weight:400;font-size:12px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .row-actions{display:flex;gap:6px;flex-wrap:wrap}
 
-label{display:block;color:#8fa1b8;font-size:10px;margin:10px 0 5px}
-input,textarea,select{width:100%;background:#101a28;border:1px solid #34445a;color:#e7eef8;border-radius:5px;padding:9px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;outline:none}
-input:focus,textarea:focus,select:focus{border-color:#4388f6}
+label{display:block;color:#8b949e;font-size:11px;margin:10px 0 5px}
+input,textarea,select{width:100%;background:#0d1117;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:8px 10px;font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:none}
+input:focus,textarea:focus,select:focus{border-color:#1f6feb;box-shadow:0 0 0 3px #1f6feb33}
 textarea{resize:vertical;font-family:inherit}
+select{font-family:inherit}
 
-.hint{font-size:10px;line-height:1.6;color:#8294aa;margin:10px 0 0}
-.hint b{color:#a9bad0}
-
+.hint{font-size:11px;line-height:1.6;color:#8b949e;margin:10px 0 0}
+.hint b{color:#c9d1d9}
+.hint code,.panel code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:1px 5px;font-size:11px;color:#79c0ff}
 .meta{display:grid;gap:5px;padding:12px 0}
-.meta small{font-size:9px;color:#8193aa;letter-spacing:1px}
+.meta small{font-size:9px;color:#8b949e;letter-spacing:1px}
 .meta b{font-size:12px;overflow-wrap:anywhere;margin-bottom:7px;font-weight:600}
+.divider{display:flex;align-items:center;gap:10px;margin:14px 0;color:#8b949e;font-size:11px}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:#30363d}
+.device{margin-top:12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px}
+.device-code{display:block;text-align:center;font-size:22px;letter-spacing:4px;color:#79c0ff;margin:8px 0}
 
-.empty{padding:24px;text-align:center;color:#8192a8;border:1px dashed #34445a;border-radius:6px;font-size:12px}
+.empty{padding:24px;text-align:center;color:#8b949e;border:1px dashed #30363d;border-radius:6px;font-size:12px}
 
-.file{display:grid;grid-template-columns:44px minmax(100px,1fr) 80px 130px;align-items:center;gap:8px;padding:9px;border-bottom:1px solid #28374a;font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+/* ---------- repo list (github.com style) ---------- */
+.toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.toolbar input{flex:1;min-width:180px}
+.toolbar select{width:auto}
+.autoupdate-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:9px 12px;margin-bottom:12px}
+.autoupdate-bar .switch-row{display:flex;align-items:center;gap:7px;font-size:12px;cursor:pointer}
+.autoupdate-bar input{accent-color:#1f6feb;width:auto}
+.autoupdate-bar select{width:auto;padding:5px 8px}
+.autoupdate-bar .hint{margin:0}
+.badge{background:#1f6feb;color:#fff;border-radius:10px;padding:2px 9px;font-size:11px;font-weight:600}
+.badge.warn{background:#9e6a03}
+.repo-item{display:block;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid #21262d;border-radius:0;padding:13px 4px}
+.repo-item:hover{background:#161b22}
+.repo-item:last-child{border-bottom:0}
+.repo-item .rname{color:#58a6ff;font-size:15px;font-weight:600}
+.repo-item .rname:hover{text-decoration:underline}
+.repo-item .rdesc{color:#8b949e;font-size:12px;margin:5px 0 8px;overflow-wrap:anywhere}
+.repo-item .rmeta{display:flex;gap:14px;flex-wrap:wrap;color:#8b949e;font-size:11px}
+.repo-item .rmeta .lang-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#79c0ff;margin-right:4px}
+.repo-item .rmeta .vis{border:1px solid #30363d;border-radius:10px;padding:0 7px;font-size:10px}
+.repo-item .rmeta .updated{color:#3fb950}
+
+/* ---------- repo detail ---------- */
+.repo-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px}
+.repo-head h2{font-size:18px;margin:0}
+.repo-head .hint{margin:6px 0 0}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.badges span{border:1px solid #30363d;border-radius:10px;padding:1px 9px;font-size:11px;color:#8b949e}
+.repo-stats{display:flex;gap:16px;color:#8b949e;font-size:12px;white-space:nowrap}
+.repo-stats b{color:#e6edf3}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #30363d;margin-bottom:14px;flex-wrap:wrap}
+.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#8b949e;padding:8px 12px;font-weight:600}
+.tabs button.active{color:#e6edf3;border-bottom-color:#f78166;background:transparent}
+.tabpane h3{margin:0}
+.readme{white-space:pre-wrap;word-break:break-word}
+.file-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid #21262d;border-radius:0;padding:9px 4px;color:#e6edf3}
+.file-row:hover{background:#161b22}
+.file-row .fname{color:#58a6ff}
+.file-row .fmeta{margin-left:auto;color:#8b949e;font-size:11px}
+.commititem,.issueitem{padding:10px 4px;border-bottom:1px solid #21262d}
+.commititem:last-child,.issueitem:last-child{border-bottom:0}
+.commititem b,.issueitem b{display:block;font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.commititem small,.issueitem small{color:#8b949e;font-size:11px}
+.issueitem .num{color:#58a6ff;font-weight:600;margin-right:6px}
+.state-open{color:#3fb950;font-weight:600}
+.state-closed{color:#a371f7;font-weight:600}
+
+/* ---------- local git (v1 panels, restyled) ---------- */
+.file{display:grid;grid-template-columns:44px minmax(100px,1fr) 80px 130px;align-items:center;gap:8px;padding:9px;border-bottom:1px solid #21262d;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .file:last-child{border-bottom:0}
 .file .path{overflow-wrap:anywhere}
-.file .state{color:#8294aa;font-size:9px;letter-spacing:.5px}
+.file .state{color:#8b949e;font-size:9px;letter-spacing:.5px}
 .file .actions{display:flex;gap:5px;justify-content:flex-end}
 .file button{padding:5px 8px;font-size:10px}
-.tag{color:#e8bd62;font-weight:600;text-align:center}
-.tag.staged{color:#66d5a0}
+.tag{color:#d29922;font-weight:600;text-align:center}
+.tag.staged{color:#3fb950}
 
-pre{white-space:pre-wrap;overflow:auto;max-height:330px;background:#101925;border-radius:6px;padding:13px;color:#cbd8e9;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0}
+pre{white-space:pre-wrap;overflow:auto;max-height:420px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:13px;color:#c9d1d9;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:0}
 
-.commititem{padding:10px;border-bottom:1px solid #2b394b}
-.commititem:last-child{border-bottom:0}
-.commititem b{display:block;font-size:11px;font-weight:600;overflow-wrap:anywhere}
-.commititem small{color:#8294aa;font-size:10px}
+.log{background:#010409;border:1px solid #21262d;border-radius:6px;padding:10px;color:#8b949e;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-height:36px;overflow-wrap:anywhere}
 
-.log{background:#0a111b;border:1px solid #26364a;border-radius:7px;padding:10px;color:#93a7c0;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;min-height:36px;overflow-wrap:anywhere}
-
-@media(max-width:850px){
-  header{height:auto;flex-wrap:wrap;padding:12px;gap:12px}
+@media(max-width:900px){
+  .gh-header{height:auto;flex-wrap:wrap;padding:12px;gap:10px}
   .brand{min-width:0}
-  nav{margin-left:0;width:100%}
+  .gh-search{flex:1 1 100%}
   main{grid-template-columns:1fr}
   .file{grid-template-columns:40px 1fr;row-gap:6px}
   .file .state,.file .actions{grid-column:2}

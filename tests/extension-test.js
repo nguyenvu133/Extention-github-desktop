@@ -78,7 +78,24 @@ class El {
     this.dataset = {};
     this.style = {};
     this.onclick = null;
+    this.onchange = null;
+    this.oninput = null;
+    this.checked = false;
+    this.src = '';
+    this.alt = '';
     this._html = '';
+    const classes = new Set();
+    this.classList = {
+      add: (...names) => { for (const n of names) classes.add(n); this.className = [...classes].join(' '); },
+      remove: (...names) => { for (const n of names) classes.delete(n); this.className = [...classes].join(' '); },
+      toggle: (name, force) => {
+        const want = force === undefined ? !classes.has(name) : !!force;
+        if (want) classes.add(name); else classes.delete(name);
+        this.className = [...classes].join(' ');
+        return want;
+      },
+      contains: (name) => classes.has(name),
+    };
   }
   get textContent() {
     if (this.children.length) return this.children.map((c) => c.textContent).join('');
@@ -115,6 +132,7 @@ function makeDocument(ids) {
       return map.get(id);
     },
     createElement(tag) { return new El(tag); },
+    createTextNode(text) { return Object.assign(new El('span'), { _text: String(text) }); },
     querySelectorAll() { return []; },
   };
 }
@@ -136,7 +154,7 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '1.0.2' }),
+      getManifest: () => ({ version: '2.0.0' }),
       getURL: (p) => 'chrome-extension://test/' + p,
       onMessage: { addListener() {} },
       onInstalled: { addListener() {} },
@@ -152,7 +170,17 @@ const DASHBOARD_IDS = [
   'bridgeUrl', 'token', 'summary', 'description', 'branchSelect', 'diff',
   'diffFile', 'changes', 'history', 'saveConnection', 'connectRepo',
   'refreshStatus', 'stageAll', 'unstageAll', 'commit', 'fetch', 'pull',
-  'push', 'switchBranch', 'loadHistory', 'copyPath',
+  'push', 'switchBranch', 'loadHistory', 'copyPath', 'reconnectBtn',
+  'userChip', 'userAvatar', 'userLogin', 'logoutBtn', 'loginPanel', 'patInput', 'loginPatBtn',
+  'deviceFlowBtn', 'deviceBox', 'deviceCode', 'deviceOpenBtn', 'deviceStatus', 'rateLimit',
+  'view-repos', 'view-repo', 'view-local', 'navRepos', 'navLocal', 'globalSearch',
+  'repoCount', 'refreshRepos', 'refreshReposForce', 'repoSearch', 'repoFilter', 'repoSort',
+  'autoUpdateToggle', 'autoUpdateInterval', 'autoUpdateState', 'manualRefresh', 'updateBadge', 'repoList',
+  'backToRepos', 'detailName', 'detailDesc', 'detailBadges', 'detailStars', 'detailForks', 'detailIssues',
+  'readmeName', 'readmeView', 'fileBranchSelect', 'fileUpBtn', 'filePathLabel', 'fileTree',
+  'fileViewerWrap', 'fileViewerName', 'fileViewerMeta', 'fileViewer',
+  'reloadCommits', 'commitList', 'reloadBranches', 'branchList', 'reloadIssues', 'issueList',
+  'reloadPulls', 'pullList',
 ];
 
 function runScript(file, ids, store) {
@@ -165,6 +193,8 @@ function runScript(file, ids, store) {
     console,
     setTimeout,
     clearTimeout,
+    setInterval,
+    clearInterval,
     URL,
     navigator: { clipboard: { writeText: async () => {} } },
     alert: (m) => console.log('    [alert] ' + m),
@@ -197,7 +227,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(1200);
     const d = dash.document;
 
-    check('bridge status shows CONNECTED', d.getElementById('bridgeStatus').textContent === 'LOCAL BRIDGE CONNECTED',
+    check('bridge status shows CONNECTED', d.getElementById('bridgeStatus').textContent === 'BRIDGE CONNECTED',
       d.getElementById('bridgeStatus').textContent);
     check('lamp class is ok', d.getElementById('lamp').className === 'ok', d.getElementById('lamp').className);
     check('token field pre-filled from storage', d.getElementById('token').value === TOKEN);
@@ -283,7 +313,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
     check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
       p.getElementById('message').textContent);
-    check('popup version from manifest', p.getElementById('version').textContent === 'v1.0.2',
+    check('popup version from manifest', p.getElementById('version').textContent === 'v2.0.0',
       p.getElementById('version').textContent);
     check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
       p.getElementById('repoName').textContent);

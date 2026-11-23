@@ -3,26 +3,58 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PixiJS Engine × GitHub Desktop</title>
+<title>PixiJS Engine × GitHub</title>
 <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
 
-<header>
+<header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB DESKTOP</b><small>LOCAL GAME DEVELOPMENT WORKSPACE</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v2</small></div>
   </div>
-  <div class="connect"><i id="lamp"></i><span id="bridgeStatus">BRIDGE DISCONNECTED</span></div>
-  <nav>
-    <button id="fetch">Fetch Origin</button>
-    <button id="pull">Pull</button>
-    <button id="push" class="blue">Push</button>
+
+  <div class="gh-search">
+    <input id="globalSearch" type="search" placeholder="Search repositories…" spellcheck="false" autocomplete="off">
+  </div>
+
+  <nav class="gh-nav">
+    <button id="navRepos" class="active">Repositories</button>
+    <button id="navLocal">Local Git</button>
   </nav>
+
+  <div class="connect" title="Bridge connection state">
+    <i id="lamp"></i>
+    <span id="bridgeStatus">BRIDGE DISCONNECTED</span>
+    <button id="reconnectBtn" class="mini" title="Reconnect to the bridge">Reconnect</button>
+  </div>
+
+  <div id="userChip" class="user-chip hidden">
+    <img id="userAvatar" class="avatar" alt="" src="">
+    <span id="userLogin">—</span>
+    <button id="logoutBtn" class="mini" title="Sign out of GitHub">Sign out</button>
+  </div>
 </header>
 
 <main>
 <aside>
+
+  <section class="panel" id="loginPanel">
+    <h3>SIGN IN TO GITHUB</h3>
+    <p class="hint">Sign in once — the bridge stores your token on your own machine (<code>bridge/.github-config.json</code>, mode 0600). The extension never sees the token itself.</p>
+    <label for="patInput">Personal Access Token (classic or fine-grained, scope <code>repo</code> + <code>read:user</code>)</label>
+    <input id="patInput" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
+    <button id="loginPatBtn" class="blue full">SIGN IN WITH TOKEN</button>
+    <div class="divider"><span>or</span></div>
+    <button id="deviceFlowBtn" class="full">SIGN IN WITH DEVICE FLOW</button>
+    <div id="deviceBox" class="device hidden">
+      <p class="hint">Open GitHub and enter this code:</p>
+      <b id="deviceCode" class="device-code">—</b>
+      <button id="deviceOpenBtn" class="full">OPEN GITHUB.COM/LOGIN/DEVICE</button>
+      <p id="deviceStatus" class="hint">Waiting for you to approve on GitHub…</p>
+    </div>
+    <p class="hint">Create a token at <b>github.com → Settings → Developer settings → Personal access tokens</b>. Give it <code>repo</code> scope to read private repositories.</p>
+  </section>
 
   <section class="panel">
     <h3>LOCAL BRIDGE</h3>
@@ -31,11 +63,12 @@
     <label for="token">Bridge token</label>
     <input id="token" type="password" placeholder="Paste the token printed by the bridge" autocomplete="off" spellcheck="false">
     <button id="saveConnection" class="blue full">CONNECT BRIDGE</button>
-    <p class="hint">The bridge listens on your machine only. The token is stored in Chrome local storage.</p>
+    <p class="hint">Start the bridge first: <code>node bridge/bridge-server.js</code> (or the start script). The bridge prints its token once — if you lost it, read <code>bridge/.bridge-token</code>.</p>
+    <p class="hint">Rate limit: <b id="rateLimit">—</b></p>
   </section>
 
   <section class="panel">
-    <h3>REPOSITORY</h3>
+    <h3>LOCAL REPOSITORY</h3>
     <label for="repoPath">Local repository path</label>
     <input id="repoPath" placeholder="/Users/you/Projects/pixi-game" spellcheck="false">
     <button id="connectRepo" class="full">CONNECT REPOSITORY</button>
@@ -47,10 +80,11 @@
     <label for="branchSelect">Switch branch</label>
     <select id="branchSelect"><option value="">Select branch</option></select>
     <button id="switchBranch" class="full">CHECKOUT BRANCH</button>
+    <button id="copyPath" class="full">COPY REPOSITORY PATH</button>
   </section>
 
   <section class="panel">
-    <h3>COMMIT</h3>
+    <h3>COMMIT (LOCAL)</h3>
     <label for="summary">Summary</label>
     <input id="summary" placeholder="Update PixiJS game">
     <label for="description">Description</label>
@@ -58,42 +92,170 @@
     <button id="commit" class="blue full">COMMIT STAGED FILES</button>
   </section>
 
-  <section class="panel">
-    <h3>GITHUB DESKTOP</h3>
-    <p class="hint">This extension does not drive the GitHub Desktop UI. It runs real Git commands through the local bridge. To open the same repository in GitHub Desktop, copy its path and use <b>File → Add local repository</b>.</p>
-    <button id="copyPath" class="full">COPY REPOSITORY PATH</button>
-  </section>
-
 </aside>
 
 <section class="content">
 
-  <div class="panel">
-    <div class="row">
-      <h2>CHANGES / STAGING</h2>
-      <div class="row-actions">
-        <button id="refreshStatus">Refresh</button>
-        <button id="stageAll">Stage All</button>
-        <button id="unstageAll">Unstage All</button>
+  <!-- ============ REPOSITORIES (GitHub) ============ -->
+  <div id="view-repos" class="view">
+    <div class="panel">
+      <div class="row">
+        <h2>YOUR REPOSITORIES <span id="repoCount" class="count"></span></h2>
+        <div class="row-actions">
+          <button id="refreshRepos">Refresh</button>
+          <button id="refreshReposForce" title="Bypass the cache and re-fetch every page">Force refresh</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <input id="repoSearch" type="search" placeholder="Filter by name or description…" spellcheck="false" autocomplete="off">
+        <select id="repoFilter" title="Filter repositories">
+          <option value="all">All</option>
+          <option value="public">Public</option>
+          <option value="private">Private</option>
+          <option value="forks">Forks</option>
+          <option value="sources">Sources</option>
+          <option value="archived">Archived</option>
+        </select>
+        <select id="repoSort" title="Sort repositories">
+          <option value="updated">Recently updated</option>
+          <option value="pushed">Recently pushed</option>
+          <option value="stars">Most stars</option>
+          <option value="name">Name A–Z</option>
+          <option value="created">Recently created</option>
+        </select>
+      </div>
+
+      <div class="autoupdate-bar">
+        <label class="switch-row">
+          <input type="checkbox" id="autoUpdateToggle">
+          <span>Auto-update</span>
+        </label>
+        <select id="autoUpdateInterval" title="How often the bridge checks GitHub for new commits">
+          <option value="15">every 15s</option>
+          <option value="30">every 30s</option>
+          <option value="60" selected>every 1 min</option>
+          <option value="300">every 5 min</option>
+          <option value="900">every 15 min</option>
+        </select>
+        <span id="autoUpdateState" class="hint">Auto-update is off.</span>
+        <button id="manualRefresh" class="mini">Check now</button>
+        <span id="updateBadge" class="badge hidden"></span>
+      </div>
+
+      <div id="repoList" class="empty">Sign in to GitHub to list your repositories.</div>
+    </div>
+  </div>
+
+  <!-- ============ REPO DETAIL ============ -->
+  <div id="view-repo" class="view hidden">
+    <div class="panel">
+      <button id="backToRepos" class="mini">← All repositories</button>
+      <div class="repo-head">
+        <div>
+          <h2 id="detailName">—</h2>
+          <p id="detailDesc" class="hint"></p>
+          <div id="detailBadges" class="badges"></div>
+        </div>
+        <div class="repo-stats">
+          <span title="Stars">★ <b id="detailStars">0</b></span>
+          <span title="Forks">⑂ <b id="detailForks">0</b></span>
+          <span title="Open issues">◉ <b id="detailIssues">0</b></span>
+        </div>
+      </div>
+      <div class="tabs">
+        <button data-tab="overview" class="active">Overview</button>
+        <button data-tab="files">Files</button>
+        <button data-tab="commits">Commits</button>
+        <button data-tab="branches">Branches</button>
+        <button data-tab="issues">Issues</button>
+        <button data-tab="pulls">Pull requests</button>
+      </div>
+
+      <div id="tab-overview" class="tabpane">
+        <div class="row"><h3>README</h3><span id="readmeName" class="hint"></span></div>
+        <pre id="readmeView" class="readme">No README loaded.</pre>
+      </div>
+
+      <div id="tab-files" class="tabpane hidden">
+        <div class="row">
+          <h3>FILES</h3>
+          <div class="row-actions">
+            <select id="fileBranchSelect" title="Branch for the file tree"></select>
+            <button id="fileUpBtn" class="mini" title="Go up one folder">↑ Up</button>
+          </div>
+        </div>
+        <p class="hint">Path: <b id="filePathLabel">/</b></p>
+        <div id="fileTree" class="empty">Select a repository to browse its files.</div>
+        <div id="fileViewerWrap" class="hidden">
+          <div class="row"><h3 id="fileViewerName">—</h3><span id="fileViewerMeta" class="hint"></span></div>
+          <pre id="fileViewer">Select a file to view it.</pre>
+        </div>
+      </div>
+
+      <div id="tab-commits" class="tabpane hidden">
+        <div class="row"><h3>RECENT COMMITS</h3><button id="reloadCommits" class="mini">Refresh</button></div>
+        <div id="commitList" class="empty">No commits loaded.</div>
+      </div>
+
+      <div id="tab-branches" class="tabpane hidden">
+        <div class="row"><h3>BRANCHES</h3><button id="reloadBranches" class="mini">Refresh</button></div>
+        <div id="branchList" class="empty">No branches loaded.</div>
+      </div>
+
+      <div id="tab-issues" class="tabpane hidden">
+        <div class="row"><h3>OPEN ISSUES</h3><button id="reloadIssues" class="mini">Refresh</button></div>
+        <div id="issueList" class="empty">No issues loaded.</div>
+      </div>
+
+      <div id="tab-pulls" class="tabpane hidden">
+        <div class="row"><h3>OPEN PULL REQUESTS</h3><button id="reloadPulls" class="mini">Refresh</button></div>
+        <div id="pullList" class="empty">No pull requests loaded.</div>
       </div>
     </div>
-    <div id="changes" class="empty">Connect the bridge and a repository to load real Git status.</div>
   </div>
 
-  <div class="panel">
-    <div class="row">
-      <h2>DIFF VIEWER</h2>
-      <span id="diffFile" class="hint">Select a changed file</span>
+  <!-- ============ LOCAL GIT ============ -->
+  <div id="view-local" class="view hidden">
+    <div class="panel">
+      <div class="row">
+        <h2>CHANGES / STAGING</h2>
+        <div class="row-actions">
+          <button id="refreshStatus">Refresh</button>
+          <button id="stageAll">Stage All</button>
+          <button id="unstageAll">Unstage All</button>
+        </div>
+      </div>
+      <div id="changes" class="empty">Connect the bridge and a repository to load real Git status.</div>
     </div>
-    <pre id="diff">No diff selected.</pre>
-  </div>
 
-  <div class="panel">
-    <div class="row">
-      <h2>COMMIT HISTORY</h2>
-      <button id="loadHistory">Refresh History</button>
+    <div class="panel">
+      <div class="row">
+        <h2>DIFF VIEWER</h2>
+        <span id="diffFile" class="hint">Select a changed file</span>
+      </div>
+      <pre id="diff">No diff selected.</pre>
     </div>
-    <div id="history" class="empty">No history loaded.</div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>COMMIT HISTORY</h2>
+        <button id="loadHistory">Refresh History</button>
+      </div>
+      <div id="history" class="empty">No history loaded.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>SYNC</h2>
+        <div class="row-actions">
+          <button id="fetch">Fetch Origin</button>
+          <button id="pull">Pull</button>
+          <button id="push" class="blue">Push</button>
+        </div>
+      </div>
+      <p class="hint">Pull is fast-forward only. Push adds <code>-u origin &lt;branch&gt;</code> automatically on a new branch.</p>
+    </div>
   </div>
 
   <div id="log" class="log">Ready. Connect the local bridge to begin.</div>

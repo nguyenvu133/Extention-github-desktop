@@ -1,15 +1,1 @@
-{
-  "name": "pixijs-github-desktop-local-bridge",
-  "version": "1.0.2",
-  "private": true,
-  "description": "Local Git bridge for the PixiJS GitHub Desktop Sync Chrome extension",
-  "main": "bridge-server.js",
-  "scripts": {
-    "start": "node bridge-server.js",
-    "test": "node ../tests/extension-test.js"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "license": "MIT"
-}
+{"description":"Local Git + GitHub bridge for the PixiJS GitHub Desktop Sync Chrome extension","engines":{"node":">=18"},"license":"MIT","main":"bridge-server.js","name":"pixijs-github-desktop-local-bridge","private":true,"scripts":{"start":"node bridge-server.js","test":"node ../tests/bridge-v2-test.js","test:all":"node ../tests/run-all.js"},"version":"2.0.0"}

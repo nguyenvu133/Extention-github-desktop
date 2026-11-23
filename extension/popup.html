@@ -4,22 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="popup.css">
-<title>PixiJS Sync</title>
+<title>PixiJS GitHub Sync</title>
 </head>
 <body>
 <header>
   <div class="logo">P</div>
-  <div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC</small></div>
-  <span id="lamp" class="lamp"></span>
+  <div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC · v2</small></div>
+  <span id="lamp" class="lamp" title="Bridge status"></span>
 </header>
 
 <section class="status">
-  <div><small>LOCAL GIT BRIDGE</small><strong id="connection">Checking…</strong></div>
-  <button id="refresh" class="ghost" title="Re-check the bridge">&#8635;</button>
+  <div>
+    <small>LOCAL BRIDGE</small>
+    <strong id="connection">Checking…</strong>
+    <span id="bridgeDetail" class="detail">—</span>
+  </div>
+  <button id="reconnect" class="ghost" title="Reconnect to the bridge">&#8635;</button>
+</section>
+
+<section id="githubBox" class="github">
+  <small>GITHUB ACCOUNT</small>
+  <div id="githubSignedOut">
+    <p class="muted">Not signed in to GitHub yet. Open the workspace to sign in with a Personal Access Token or Device Flow.</p>
+  </div>
+  <div id="githubSignedIn" class="hidden">
+    <img id="ghAvatar" class="avatar" alt="" src="">
+    <div>
+      <b id="ghLogin">—</b>
+      <span id="ghName" class="detail">—</span>
+    </div>
+    <button id="logout" class="ghost small" title="Sign out of GitHub">Sign out</button>
+  </div>
 </section>
 
 <div class="repo">
-  <small>CONNECTED REPOSITORY</small>
+  <small>CONNECTED REPOSITORY (LOCAL)</small>
   <b id="repoName">No repository selected</b>
   <span id="branchName">—</span>
   <p id="repoPath">Choose a local repository in Workspace.</p>
@@ -32,6 +51,14 @@
   <button data-action="push">Push</button>
 </div>
 
+<div class="autoupdate">
+  <label class="switch-row">
+    <input type="checkbox" id="autoUpdateToggle">
+    <span>Auto-update GitHub repos</span>
+  </label>
+  <span id="autoUpdateState" class="detail">—</span>
+</div>
+
 <button id="open" class="primary">OPEN FULL WORKSPACE &#8599;</button>
 
 <details class="setup">
@@ -39,6 +66,7 @@
   <label for="token">Paste the token printed by the bridge</label>
   <input id="token" type="password" placeholder="48-character hex token" autocomplete="off" spellcheck="false">
   <button id="saveToken" class="full">SAVE TOKEN</button>
+  <p class="hint">The token lives in <code>bridge/.bridge-token</code>. If the bridge was reinstalled, its token changed — paste the new one.</p>
 </details>
 
 <footer><span id="version">v—</span><span id="message">Ready</span></footer>
