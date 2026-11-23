@@ -7,15 +7,32 @@
  * chrome.* shim, and runs them against the real bridge on 127.0.0.1:17321.
  * This exercises the actual extension code paths (api(), health(), status(),
  * branches(), history(), commit, stage, diff) without a browser.
+ *
+ * The harness is self-contained: it creates its own throwaway Git repository
+ * in the OS temp directory, so it can be run repeatedly and never depends on
+ * (or mutates) any repository you already have.
+ *
+ * Usage:
+ *   1. start the bridge:  node bridge/bridge-server.js
+ *   2. run the tests:     node tests/extension-test.js
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
+const { execFileSync } = require('child_process');
 
 const EXT = path.resolve(__dirname, '..', 'extension');
-const TOKEN = fs.readFileSync(path.resolve(__dirname, '..', 'bridge', '.bridge-token'), 'utf8').trim();
-const BASE = 'http://127.0.0.1:17321';
+const TOKEN_FILE = path.resolve(__dirname, '..', 'bridge', '.bridge-token');
+const BASE = process.env.BRIDGE_URL || 'http://127.0.0.1:17321';
+
+if (!fs.existsSync(TOKEN_FILE)) {
+  console.error(`\nNo bridge token at ${TOKEN_FILE}`);
+  console.error('Start the bridge first:  node bridge/bridge-server.js\n');
+  process.exit(1);
+}
+const TOKEN = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
 
 let failures = 0;
 function check(name, condition, detail) {
@@ -25,6 +42,27 @@ function check(name, condition, detail) {
     failures += 1;
     console.log(`  FAIL  ${name}${detail ? ' -> ' + detail : ''}`);
   }
+}
+
+/* ---------------- throwaway repository ---------------- */
+
+function git(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' }),
+  });
+}
+
+function makeRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pixijs-bridge-test-'));
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.name', 'Bridge Test']);
+  git(dir, ['config', 'user.email', 'bridge-test@example.com']);
+  fs.writeFileSync(path.join(dir, 'seed.txt'), 'seed\n');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-q', '-m', 'seed commit']);
+  return dir;
 }
 
 /* ---------------- minimal DOM ---------------- */
@@ -109,6 +147,14 @@ function makeChrome(store) {
 
 /* ---------------- run a script ---------------- */
 
+const DASHBOARD_IDS = [
+  'log', 'lamp', 'bridgeStatus', 'repoName', 'branch', 'remote', 'repoPath',
+  'bridgeUrl', 'token', 'summary', 'description', 'branchSelect', 'diff',
+  'diffFile', 'changes', 'history', 'saveConnection', 'connectRepo',
+  'refreshStatus', 'stageAll', 'unstageAll', 'commit', 'fetch', 'pull',
+  'push', 'switchBranch', 'loadHistory', 'copyPath',
+];
+
 function runScript(file, ids, store) {
   const code = fs.readFileSync(path.join(EXT, file), 'utf8');
   const document = makeDocument(ids);
@@ -138,112 +184,112 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   console.log('\n=== Extension functional test (real bridge) ===\n');
 
-  /* --- 1. dashboard.js boots and connects --- */
-  console.log('[dashboard.js]');
-  const store = { bridgeUrl: BASE, token: TOKEN };
-  const dash = runScript('dashboard.js', [
-    'log', 'lamp', 'bridgeStatus', 'repoName', 'branch', 'remote', 'repoPath',
-    'bridgeUrl', 'token', 'summary', 'description', 'branchSelect', 'diff',
-    'diffFile', 'changes', 'history', 'saveConnection', 'connectRepo',
-    'refreshStatus', 'stageAll', 'unstageAll', 'commit', 'fetch', 'pull',
-    'push', 'switchBranch', 'loadHistory', 'copyPath',
-  ], store);
+  const repo = makeRepo();
+  const repoName = path.basename(repo);
+  console.log(`temp repository: ${repo}\n`);
 
-  await sleep(1200);
-  const d = dash.document;
+  try {
+    /* --- 1. dashboard.js boots and connects --- */
+    console.log('[dashboard.js]');
+    const store = { bridgeUrl: BASE, token: TOKEN };
+    const dash = runScript('dashboard.js', DASHBOARD_IDS, store);
 
-  check('bridge status shows CONNECTED', d.getElementById('bridgeStatus').textContent === 'LOCAL BRIDGE CONNECTED',
-    d.getElementById('bridgeStatus').textContent);
-  check('lamp class is ok', d.getElementById('lamp').className === 'ok', d.getElementById('lamp').className);
-  check('token field pre-filled from storage', d.getElementById('token').value === TOKEN);
-  check('bridgeUrl field pre-filled', d.getElementById('bridgeUrl').value === BASE);
+    await sleep(1200);
+    const d = dash.document;
 
-  /* --- 2. connect a repository through the real UI handler --- */
-  d.getElementById('repoPath').value = '/workspace/testrepo';
-  await d.getElementById('connectRepo').onclick();
-  await sleep(600);
+    check('bridge status shows CONNECTED', d.getElementById('bridgeStatus').textContent === 'LOCAL BRIDGE CONNECTED',
+      d.getElementById('bridgeStatus').textContent);
+    check('lamp class is ok', d.getElementById('lamp').className === 'ok', d.getElementById('lamp').className);
+    check('token field pre-filled from storage', d.getElementById('token').value === TOKEN);
+    check('bridgeUrl field pre-filled', d.getElementById('bridgeUrl').value === BASE);
 
-  check('repoName populated', d.getElementById('repoName').textContent === 'testrepo',
-    d.getElementById('repoName').textContent);
-  check('branch populated', !!d.getElementById('branch').textContent && d.getElementById('branch').textContent !== '—',
-    d.getElementById('branch').textContent);
-  check('remote shows "No remote" for local repo', d.getElementById('remote').textContent === 'No remote',
-    d.getElementById('remote').textContent);
-  check('changes list rendered rows', d.getElementById('changes').children.length >= 0);
-  check('history rendered commits', d.getElementById('history').children.length > 0,
-    'children=' + d.getElementById('history').children.length);
-  check('branchSelect populated', d.getElementById('branchSelect').children.length > 0,
-    'options=' + d.getElementById('branchSelect').children.length);
+    /* --- 2. connect the repository through the real UI handler --- */
+    d.getElementById('repoPath').value = repo;
+    await d.getElementById('connectRepo').onclick();
+    await sleep(600);
 
-  /* --- 3. stage / diff / commit through the UI --- */
-  fs.writeFileSync('/workspace/testrepo/ui-test.txt', 'from ui test\n');
-  await d.getElementById('refreshStatus').onclick();
-  await sleep(400);
+    check('repoName populated', d.getElementById('repoName').textContent === repoName,
+      d.getElementById('repoName').textContent);
+    check('branch populated', d.getElementById('branch').textContent === 'main',
+      d.getElementById('branch').textContent);
+    check('remote shows "No remote" for local repo', d.getElementById('remote').textContent === 'No remote',
+      d.getElementById('remote').textContent);
+    check('history rendered the seed commit', d.getElementById('history').children.length === 1,
+      'children=' + d.getElementById('history').children.length);
+    check('branchSelect populated', d.getElementById('branchSelect').children.length > 0,
+      'options=' + d.getElementById('branchSelect').children.length);
 
-  const rows = d.getElementById('changes').children;
-  const uiRow = rows.find((r) => r.children.some((c) => c.textContent === 'ui-test.txt'));
-  check('new file appears in changes list', !!uiRow);
+    /* --- 3. stage / diff / commit through the UI --- */
+    const fileName = 'ui-test.txt';
+    const fileBody = 'from ui test\n';
+    fs.writeFileSync(path.join(repo, fileName), fileBody);
 
-  if (uiRow) {
-    const buttons = uiRow.children[uiRow.children.length - 1].children;
-    const diffBtn = buttons[0];
-    const stageBtn = buttons[1];
-    check('row has Diff + Stage buttons', !!diffBtn && !!stageBtn);
-
-    await diffBtn.onclick();
+    await d.getElementById('refreshStatus').onclick();
     await sleep(400);
-    check('diff viewer shows added content', d.getElementById('diff').textContent.includes('from ui test'),
-      d.getElementById('diff').textContent.slice(0, 80));
 
-    await stageBtn.onclick();
-    await sleep(500);
-    check('file became staged', d.getElementById('log').textContent.includes('Staged'),
+    const rows = d.getElementById('changes').children;
+    const uiRow = rows.find((r) => r.children.some((c) => c.textContent === fileName));
+    check('new file appears in changes list', !!uiRow,
+      'rows=' + rows.length);
+
+    if (uiRow) {
+      const buttons = uiRow.children[uiRow.children.length - 1].children;
+      const diffBtn = buttons[0];
+      const stageBtn = buttons[1];
+      check('row has Diff + Stage buttons', !!diffBtn && !!stageBtn);
+
+      await diffBtn.onclick();
+      await sleep(400);
+      check('diff viewer shows added content', d.getElementById('diff').textContent.includes('from ui test'),
+        d.getElementById('diff').textContent.slice(0, 80));
+
+      await stageBtn.onclick();
+      await sleep(500);
+      check('file became staged', d.getElementById('log').textContent.includes('Staged'),
+        d.getElementById('log').textContent);
+    }
+
+    d.getElementById('summary').value = 'UI test commit';
+    d.getElementById('description').value = 'created by harness';
+    await d.getElementById('commit').onclick();
+    await sleep(700);
+    check('commit succeeded', d.getElementById('log').textContent.includes('Commit created'),
       d.getElementById('log').textContent);
+    check('summary field cleared after commit', d.getElementById('summary').value === '');
+    check('history grew to 2 commits', d.getElementById('history').children.length === 2,
+      'children=' + d.getElementById('history').children.length);
+
+    /* --- 4. error path: bad token --- */
+    console.log('\n[error handling]');
+    const bad = runScript('dashboard.js', DASHBOARD_IDS, { bridgeUrl: BASE, token: 'deadbeef'.repeat(6) });
+    await sleep(1000);
+    bad.document.getElementById('repoPath').value = repo;
+    await bad.document.getElementById('connectRepo').onclick();
+    await sleep(500);
+    check('bad token surfaces an error in the log',
+      bad.document.getElementById('log').textContent.includes('ERROR'),
+      bad.document.getElementById('log').textContent);
+
+    /* --- 5. popup.js --- */
+    console.log('\n[popup.js]');
+    const pop = runScript('popup.js', [
+      'lamp', 'connection', 'repoName', 'branchName', 'repoPath', 'message',
+      'version', 'token', 'refresh', 'saveToken', 'open',
+    ], { bridgeUrl: BASE, token: TOKEN });
+    await sleep(1200);
+    const p = pop.document;
+    check('popup shows CONNECTED', p.getElementById('connection').textContent === 'CONNECTED',
+      p.getElementById('connection').textContent);
+    check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
+    check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
+      p.getElementById('message').textContent);
+    check('popup version from manifest', p.getElementById('version').textContent === 'v1.0.1',
+      p.getElementById('version').textContent);
+    check('popup shows repo name', p.getElementById('repoName').textContent === repoName,
+      p.getElementById('repoName').textContent);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
   }
-
-  d.getElementById('summary').value = 'UI test commit';
-  d.getElementById('description').value = 'created by harness';
-  await d.getElementById('commit').onclick();
-  await sleep(700);
-  check('commit succeeded', d.getElementById('log').textContent.includes('Commit created'),
-    d.getElementById('log').textContent);
-  check('summary field cleared after commit', d.getElementById('summary').value === '');
-
-  /* --- 4. error path: bad token --- */
-  console.log('\n[error handling]');
-  const badStore = { bridgeUrl: BASE, token: 'deadbeef'.repeat(6) };
-  const bad = runScript('dashboard.js', [
-    'log', 'lamp', 'bridgeStatus', 'repoName', 'branch', 'remote', 'repoPath',
-    'bridgeUrl', 'token', 'summary', 'description', 'branchSelect', 'diff',
-    'diffFile', 'changes', 'history', 'saveConnection', 'connectRepo',
-    'refreshStatus', 'stageAll', 'unstageAll', 'commit', 'fetch', 'pull',
-    'push', 'switchBranch', 'loadHistory', 'copyPath',
-  ], badStore);
-  await sleep(1000);
-  bad.document.getElementById('repoPath').value = '/workspace/testrepo';
-  await bad.document.getElementById('connectRepo').onclick();
-  await sleep(500);
-  check('bad token surfaces an error in the log',
-    bad.document.getElementById('log').textContent.includes('ERROR'),
-    bad.document.getElementById('log').textContent);
-
-  /* --- 5. popup.js --- */
-  console.log('\n[popup.js]');
-  const pop = runScript('popup.js', [
-    'lamp', 'connection', 'repoName', 'branchName', 'repoPath', 'message',
-    'version', 'token', 'refresh', 'saveToken', 'open',
-  ], { bridgeUrl: BASE, token: TOKEN });
-  await sleep(1200);
-  const p = pop.document;
-  check('popup shows CONNECTED', p.getElementById('connection').textContent === 'CONNECTED',
-    p.getElementById('connection').textContent);
-  check('popup lamp ok', p.getElementById('lamp').className === 'lamp ok', p.getElementById('lamp').className);
-  check('popup shows token accepted', p.getElementById('message').textContent === 'Token accepted',
-    p.getElementById('message').textContent);
-  check('popup version from manifest', p.getElementById('version').textContent === 'v1.0.1',
-    p.getElementById('version').textContent);
-  check('popup shows repo name', p.getElementById('repoName').textContent === 'testrepo',
-    p.getElementById('repoName').textContent);
 
   console.log('\n=== ' + (failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED') + ' ===\n');
   process.exit(failures === 0 ? 0 : 1);
