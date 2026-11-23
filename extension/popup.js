@@ -1,18 +1,20 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v2.0.0
+ * PixiJS GitHub Desktop Sync — popup v2.1.0
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
- * signed-in GitHub account, the connected local repository, quick Git
- * actions and the auto-update switch. The popup re-checks the bridge
- * on open, on demand (reconnect button) and every 10 s while it stays
- * open, so it recovers on its own when the bridge comes back.
+ * signed-in GitHub account (with its sign-in method), the connected
+ * local repository with its ahead/behind badge, quick Git actions
+ * (status / fetch / pull / push / sync) and the auto-update switch.
+ * The popup re-checks the bridge on open, on demand (reconnect button)
+ * and every 10 s while it stays open, so it recovers on its own when
+ * the bridge comes back.
  *
  * Security note: the GitHub Personal Access Token is NEVER stored in
  * the extension. It lives in bridge/.github-config.json on the user's
  * machine; the popup only ever sees the public profile (login, name,
- * avatar) through /api/github/me.
+ * avatar, sign-in method) through /api/github/user.
  */
 
 const $ = (id) => document.getElementById(id);
@@ -87,6 +89,13 @@ function setBridgeState(state, detail) {
   if (detail !== undefined) $('bridgeDetail').textContent = detail;
 }
 
+function authMethodLabel(method) {
+  if (method === 'oauth-web') return 'OAuth Web';
+  if (method === 'pat') return 'PAT';
+  if (method === 'device') return 'Device Flow';
+  return method ? String(method) : '';
+}
+
 function showGithub(user) {
   if (user && user.login) {
     $('githubSignedOut').classList.add('hidden');
@@ -94,13 +103,37 @@ function showGithub(user) {
     $('ghAvatar').src = user.avatar_url || '';
     $('ghAvatar').alt = user.login;
     $('ghLogin').textContent = user.login;
+    const method = authMethodLabel(user.authMethod);
+    $('ghAuthMethod').textContent =
+      (method ? 'via ' + method : '') + (user.scopes ? ' · ' + user.scopes : '');
     $('ghName').textContent = user.name || (user.public_repos != null ? user.public_repos + ' public repos' : 'GitHub');
   } else {
     $('githubSignedOut').classList.remove('hidden');
     $('githubSignedIn').classList.add('hidden');
     $('ghAvatar').src = '';
     $('ghLogin').textContent = '—';
+    $('ghAuthMethod').textContent = '';
     $('ghName').textContent = '—';
+  }
+}
+
+// v2.1 ahead/behind badge for the local repo. Silent when there is no
+// repo or no upstream — the popup must never fail its refresh over it.
+async function showAheadBehind() {
+  const badge = $('aheadBehindBadge');
+  try {
+    const data = await api('/api/git/ahead-behind');
+    if (!data.hasUpstream) {
+      badge.textContent = 'No upstream';
+      badge.classList.remove('hidden');
+    } else {
+      badge.textContent = `↑${Number(data.ahead) || 0} ↓${Number(data.behind) || 0}`;
+      badge.title = `ahead ${Number(data.ahead) || 0}, behind ${Number(data.behind) || 0}${data.upstream ? ' ' + data.upstream : ''}`;
+      badge.classList.remove('hidden');
+    }
+  } catch (_) {
+    badge.textContent = '';
+    badge.classList.add('hidden');
   }
 }
 
@@ -145,8 +178,19 @@ async function refresh() {
     }
 
     // GitHub sign-in state + auto-update state (both read-only here).
+    // v2.1: /user reports the sign-in method + scopes; fall back to /me
+    // when talking to an older bridge.
     try {
-      const me = await api('/api/github/me');
+      let me;
+      try {
+        me = await api('/api/github/user');
+      } catch (_) {
+        me = await api('/api/github/me');
+      }
+      if (me.authed && me.user) {
+        if (!me.user.authMethod && me.authMethod) me.user.authMethod = me.authMethod;
+        if (!me.user.scopes && me.scopes) me.user.scopes = me.scopes;
+      }
       showGithub(me.authed ? me.user : null);
     } catch (_) {
       showGithub(null);
@@ -157,6 +201,7 @@ async function refresh() {
     } catch (_) {
       showAutoUpdate(null);
     }
+    await showAheadBehind();
   } catch (_) {
     setBridgeState('disconnected', 'Start the local bridge: node bridge/bridge-server.js');
     $('message').textContent = 'Start the local bridge';

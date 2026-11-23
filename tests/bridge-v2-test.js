@@ -544,7 +544,7 @@ async function waitFor(fn, timeoutMs, label) {
   try {
     /* --- 1. health --- */
     const health = await waitForHealth(10000);
-    check('health ok + version 2.0.0', health.ok === true && health.version === '2.0.0', JSON.stringify(health).slice(0, 120));
+    check('health ok + version 2.1.0', health.ok === true && health.version === '2.1.0', JSON.stringify(health).slice(0, 120));
     check('health reports github not authed', health.github && health.github.authed === false, JSON.stringify(health.github));
     check('health reports Device Flow available (test client id)', health.github && health.github.deviceFlowAvailable === true);
     check('health reports auto-update off by default', health.autoUpdate && health.autoUpdate.enabled === false);
@@ -676,7 +676,7 @@ async function waitFor(fn, timeoutMs, label) {
         req.on('error', rejectSse);
       });
       await sleep(1200);
-      check('SSE hello event received', sseEvents.some((e) => e.type === 'hello' && e.data.version === '2.0.0'), JSON.stringify(sseEvents).slice(0, 160));
+      check('SSE hello event received', sseEvents.some((e) => e.type === 'hello' && e.data.version === '2.1.0'), JSON.stringify(sseEvents).slice(0, 160));
       commitShaByRepo['octocat/beta'] = 'eeee5555555555555555555555555555555555';
       await bfetch('/api/github/refresh', { method: 'POST', body: {} });
       await sleep(1500);

@@ -11,7 +11,7 @@
 <header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v2</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v2.1</small></div>
   </div>
 
   <div class="gh-search">
@@ -32,6 +32,7 @@
   <div id="userChip" class="user-chip hidden">
     <img id="userAvatar" class="avatar" alt="" src="">
     <span id="userLogin">—</span>
+    <span id="userAuthMethod" class="auth-method" title="How you signed in to GitHub"></span>
     <button id="logoutBtn" class="mini" title="Sign out of GitHub">Sign out</button>
   </div>
 </header>
@@ -42,6 +43,20 @@
   <section class="panel" id="loginPanel">
     <h3>SIGN IN TO GITHUB</h3>
     <p class="hint">Sign in once — the bridge stores your token on your own machine (<code>bridge/.github-config.json</code>, mode 0600). The extension never sees the token itself.</p>
+    <button id="oauthConnectBtn" class="blue full big">CONNECT GITHUB</button>
+    <p id="oauthConnectHint" class="hint">Sign in with your real GitHub account in the browser (OAuth Web Flow — the recommended way).</p>
+    <details class="oauth-config">
+      <summary>OAUTH APP SETUP (ONE-TIME)</summary>
+      <p class="hint">Create a GitHub OAuth App at <b>github.com → Settings → Developer settings → OAuth Apps → New OAuth App</b>, and paste this callback URL as its <b>Authorization callback URL</b>:</p>
+      <p class="hint"><code id="oauthCallbackUrl">—</code> <button id="oauthCopyCallbackBtn" class="mini" title="Copy the callback URL">Copy</button></p>
+      <p id="oauthConfigStatus" class="hint">OAuth App: not configured yet.</p>
+      <label for="oauthClientId">Client ID</label>
+      <input id="oauthClientId" placeholder="Ov23…" autocomplete="off" spellcheck="false">
+      <label for="oauthClientSecret">Client Secret</label>
+      <input id="oauthClientSecret" type="password" placeholder="Paste the client secret (never shown again)" autocomplete="off" spellcheck="false">
+      <button id="oauthSaveBtn" class="full">SAVE OAUTH APP</button>
+    </details>
+    <div class="divider"><span>or sign in with</span></div>
     <label for="patInput">Personal Access Token (classic or fine-grained, scope <code>repo</code> + <code>read:user</code>)</label>
     <input id="patInput" type="password" placeholder="ghp_…" autocomplete="off" spellcheck="false">
     <button id="loginPatBtn" class="blue full">SIGN IN WITH TOKEN</button>
@@ -89,6 +104,8 @@
     <input id="summary" placeholder="Update PixiJS game">
     <label for="description">Description</label>
     <textarea id="description" rows="3" placeholder="Optional details"></textarea>
+    <label class="check-row"><input type="checkbox" id="commitAll"> Commit all tracked changes (stage everything first)</label>
+    <label class="check-row"><input type="checkbox" id="amendCommit"> Amend the previous commit instead of creating a new one</label>
     <button id="commit" class="blue full">COMMIT STAGED FILES</button>
   </section>
 
@@ -139,6 +156,11 @@
           <option value="900">every 15 min</option>
         </select>
         <span id="autoUpdateState" class="hint">Auto-update is off.</span>
+        <label class="switch-row" title="When a tracked repo gains commits, pull them into the local repo automatically (only when the working tree is clean)">
+          <input type="checkbox" id="autoSyncToggle" disabled>
+          <span>Auto-sync (pull)</span>
+        </label>
+        <span id="autoSyncState" class="hint"></span>
         <button id="manualRefresh" class="mini">Check now</button>
         <span id="updateBadge" class="badge hidden"></span>
       </div>
@@ -234,27 +256,140 @@
         <h2>DIFF VIEWER</h2>
         <span id="diffFile" class="hint">Select a changed file</span>
       </div>
+      <div id="diffSummary" class="hint">No diff summary loaded.</div>
       <pre id="diff">No diff selected.</pre>
     </div>
 
     <div class="panel">
       <div class="row">
         <h2>COMMIT HISTORY</h2>
-        <button id="loadHistory">Refresh History</button>
+        <div class="row-actions">
+          <button id="historyPrevBtn" class="mini">← Prev</button>
+          <span id="historyPageLabel" class="hint">Page 1</span>
+          <button id="historyNextBtn" class="mini">Next →</button>
+          <button id="loadHistory">Refresh History</button>
+        </div>
       </div>
       <div id="history" class="empty">No history loaded.</div>
     </div>
 
     <div class="panel">
       <div class="row">
-        <h2>SYNC</h2>
-        <div class="row-actions">
-          <button id="fetch">Fetch Origin</button>
-          <button id="pull">Pull</button>
-          <button id="push" class="blue">Push</button>
-        </div>
+        <h2>PUSH / PULL / SYNC</h2>
+        <span id="aheadBehindBadge" class="badge">—</span>
       </div>
-      <p class="hint">Pull is fast-forward only. Push adds <code>-u origin &lt;branch&gt;</code> automatically on a new branch.</p>
+      <div class="sync-grid">
+        <label for="pullMode">Pull mode</label>
+        <select id="pullMode" title="How Pull merges the remote branch">
+          <option value="merge" selected>Merge</option>
+          <option value="rebase">Rebase</option>
+          <option value="ff-only">Fast-forward only</option>
+        </select>
+        <label for="syncRemote">Remote</label>
+        <input id="syncRemote" value="origin" spellcheck="false" placeholder="origin">
+        <label for="syncBranch">Branch</label>
+        <input id="syncBranch" spellcheck="false" placeholder="current branch">
+      </div>
+      <div class="row-actions sync-actions">
+        <button id="fetch">Fetch Origin</button>
+        <button id="pull">Pull</button>
+        <button id="push" class="blue">Push</button>
+        <button id="syncBtn" class="blue" title="Fetch, then pull, then push — one click">Sync</button>
+      </div>
+      <label class="check-row"><input type="checkbox" id="setUpstreamCheck"> Set upstream on push (<code>-u</code>)</label>
+      <label class="check-row"><input type="checkbox" id="forcePushCheck"> Force-push with lease</label>
+      <label class="check-row"><input type="checkbox" id="forceConfirmCheck" disabled> I understand force-push can overwrite the remote branch</label>
+      <div class="row-actions sync-actions">
+        <button id="pushAllBtn" title="Push all local branches">Push all branches</button>
+        <button id="pushTagsBtn" title="Push tags">Push tags</button>
+      </div>
+      <div id="syncSteps" class="hint">Sync runs fetch → pull → push and reports each step here.</div>
+      <p class="hint">If a pull or merge conflicts, resolve it in the Merge &amp; Conflicts panel below.</p>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>BRANCHES</h2>
+        <button id="refreshBranchesBtn" class="mini">Refresh</button>
+      </div>
+      <label for="newBranchName">New branch</label>
+      <input id="newBranchName" placeholder="feature/my-change" spellcheck="false">
+      <label for="newBranchFrom">Create from (optional)</label>
+      <input id="newBranchFrom" placeholder="main — empty means current branch" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="newBranchCheckout" checked> Check out the new branch immediately</label>
+      <button id="createBranchBtn" class="full">CREATE BRANCH</button>
+      <label for="renameBranchOld">Rename branch</label>
+      <div class="sync-grid">
+        <input id="renameBranchOld" placeholder="old name" spellcheck="false">
+        <input id="renameBranchNew" placeholder="new name" spellcheck="false">
+      </div>
+      <button id="renameBranchBtn" class="full">RENAME BRANCH</button>
+      <label for="deleteBranchName">Delete branch</label>
+      <input id="deleteBranchName" placeholder="branch to delete" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="deleteBranchRemoteCheck"> Also delete it on the remote</label>
+      <label class="check-row"><input type="checkbox" id="deleteBranchForceCheck"> Force delete (unmerged branch)</label>
+      <button id="deleteBranchBtn" class="full">DELETE BRANCH</button>
+      <p class="hint">Remote branches:</p>
+      <div id="remoteBranchList" class="empty">No remote branches loaded.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>MERGE &amp; CONFLICTS</h2>
+        <button id="refreshConflictsBtn" class="mini">Refresh</button>
+      </div>
+      <label for="mergeBranchInput">Merge branch into the current branch</label>
+      <input id="mergeBranchInput" placeholder="feature/my-change" spellcheck="false">
+      <label class="check-row"><input type="checkbox" id="mergeNoFFCheck"> No fast-forward (<code>--no-ff</code>)</label>
+      <div class="row-actions sync-actions">
+        <button id="mergeBtn" class="blue">MERGE</button>
+        <button id="abortMergeBtn" title="Abort the merge in progress">Abort merge</button>
+        <button id="commitMergeBtn" title="Commit the merge after every conflict is resolved">Commit merge</button>
+      </div>
+      <div id="conflictList" class="empty">No merge conflicts.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>STASH</h2>
+        <button id="refreshStashBtn" class="mini">Refresh</button>
+      </div>
+      <label for="stashMessage">Stash message (optional)</label>
+      <input id="stashMessage" placeholder="Work in progress…" spellcheck="false">
+      <button id="createStashBtn" class="full">STASH CHANGES</button>
+      <div id="stashList" class="empty">No stashes.</div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>REMOTES</h2>
+        <button id="refreshRemotesBtn" class="mini">Refresh</button>
+      </div>
+      <div id="remoteList" class="empty">No remotes configured.</div>
+      <label for="newRemoteName">Add remote</label>
+      <div class="sync-grid">
+        <input id="newRemoteName" placeholder="name (e.g. upstream)" spellcheck="false">
+        <input id="newRemoteUrl" placeholder="https://github.com/owner/repo.git" spellcheck="false">
+      </div>
+      <button id="addRemoteBtn" class="full">ADD REMOTE</button>
+      <label for="setUrlRemoteName">Change a remote URL</label>
+      <div class="sync-grid">
+        <input id="setUrlRemoteName" placeholder="remote name" spellcheck="false">
+        <input id="setUrlRemoteUrl" placeholder="new URL" spellcheck="false">
+      </div>
+      <button id="setUrlRemoteBtn" class="full">SET REMOTE URL</button>
+    </div>
+
+    <div class="panel">
+      <div class="row"><h2>CLONE REPOSITORY</h2></div>
+      <label for="cloneUrl">Repository URL</label>
+      <input id="cloneUrl" placeholder="https://github.com/owner/repo.git" spellcheck="false">
+      <label for="clonePath">Destination folder (parent must exist)</label>
+      <input id="clonePath" placeholder="/Users/you/Projects/repo" spellcheck="false">
+      <label for="cloneBranch">Branch (optional)</label>
+      <input id="cloneBranch" placeholder="main — empty means the default branch" spellcheck="false">
+      <button id="cloneBtn" class="blue full">CLONE</button>
+      <p class="hint">After cloning, the dashboard switches to the new repository automatically.</p>
     </div>
   </div>
 

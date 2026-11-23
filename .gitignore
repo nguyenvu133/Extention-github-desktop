@@ -4,6 +4,9 @@
 # GitHub sign-in: the Personal Access Token lives here (0600).
 # NEVER commit this file — it contains a live credential.
 .github-config.json
+# GitHub OAuth App: Client ID + Client Secret live here (0600).
+# NEVER commit this file — it contains a live secret.
+.github-oauth.json
 
 # Dependencies
 node_modules/

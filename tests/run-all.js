@@ -1,15 +1,16 @@
 'use strict';
 /**
- * tests/run-all.js — Run the FULL v2 test suite in one command.
+ * tests/run-all.js — Run the FULL v2.1 test suite in one command.
  *
  *   node tests/run-all.js
  *
  * Starts a real bridge on BRIDGE_PORT (default 17321) — needed by
  * tests/extension-test.js, which reads bridge/.bridge-token — then runs
- * all 4 suites in order and stops the bridge. Exit code 0 = all pass.
+ * all 5 suites in order and stops the bridge. Exit code 0 = all pass.
  *
- * No real GitHub API is called: bridge-v2-test.js uses its own mock
- * GitHub server and its own bridge on port 17399.
+ * No real GitHub API is called: bridge-v2-test.js and bridge-v21-test.js
+ * use their own mock GitHub servers and their own bridges on ports
+ * 17399 and 17398.
  */
 const { spawn } = require('node:child_process');
 const path = require('node:path');
@@ -29,7 +30,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v2 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v2.1 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -64,6 +65,7 @@ async function main() {
     ['validate-manifest.js', 'Manifest (root + extension/)'],
     ['load-from-root-test.js', 'Load unpacked from repo root or extension/'],
     ['bridge-v2-test.js', 'Bridge v2 (mock GitHub API + dashboard in vm)'],
+    ['bridge-v21-test.js', 'Bridge v2.1 (push/pull expansion + OAuth Web Flow + auto-sync)'],
     ['extension-test.js', 'Extension functional (local Git against the live bridge)'],
   ];
   let failed = 0;

@@ -1,10 +1,12 @@
-# PixiJS GitHub Desktop Sync — v2.0.0
+# PixiJS GitHub Desktop Sync — v2.1.0
 
-> **Đồng bộ GitHub ngay trong Chrome**: đăng nhập GitHub một lần, xem **tất cả
-> repo** của bạn trên một trang giống github.com, tự động phát hiện repo có
-> commit mới, và vẫn dùng được Git local (status / stage / commit / fetch /
-> pull / push) cho thư mục trên máy — tất cả qua một **bridge chạy trên máy
-> bạn**, không qua server trung gian nào.
+> **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
+> (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
+> bạn trên một trang giống github.com, tự động phát hiện repo có commit mới
+> (có thể tự pull về), và dùng đầy đủ Git local — **pull/push mở rộng**
+> (merge/rebase/ff-only, force-with-lease, sync 1 nút, branch, merge +
+> xử lý conflict, stash, remote, clone) cho thư mục trên máy — tất cả qua
+> một **bridge chạy trên máy bạn**, không qua server trung gian nào.
 
 ```
 Chrome Extension (popup + dashboard)  ⇄  Bridge (Node.js, 127.0.0.1:17321)  ⇄  api.github.com
@@ -93,12 +95,13 @@ cd bridge
 Khi chạy đúng, terminal sẽ hiện tương tự:
 
 ```
-PixiJS GitHub Desktop Sync bridge v2.0.0
+PixiJS GitHub Bridge v2.1.0
 Listening: http://127.0.0.1:17321
-Bridge token (paste into the extension dashboard):
-  ab12cd34ef56... (token của bạn)
+Token file: bridge/.bridge-token
+TOKEN:      ab12cd34ef56... (token của bạn)
 
-GitHub login: not signed in yet (sign in from the extension dashboard)
+GitHub:     not signed in — sign in from the extension (Connect GitHub, PAT or Device Flow).
+OAuth App:  not configured — Device Flow and Connect GitHub need a client id (see README section 6).
 Auto-update: OFF
 
 Paste the TOKEN into the extension dashboard, then click "Connect Bridge".
@@ -120,25 +123,37 @@ set BRIDGE_PORT=18080 && node bridge-server.js  # Windows cmd
 
 Nhớ sửa **Bridge URL** trong extension cho khớp (mục 5).
 
-### Bật OAuth Device Flow (không bắt buộc)
+### Bật OAuth App — cho "Kết nối GitHub" và Device Flow (không bắt buộc nếu chỉ dùng PAT)
 
-Chỉ cần nếu bạn muốn đăng nhập GitHub kiểu "nhập mã 6 ký tự" thay vì dán
-token (mục 6, cách 2). Cần tạo một **OAuth App** trên GitHub trước:
+Muốn đăng nhập bằng tài khoản GitHub thật (bấm "Kết nối GitHub", đăng nhập
+trên github.com — mục 6, cách 1) hoặc kiểu "nhập mã 6 ký tự" (Device Flow,
+cách 3), bạn cần tạo một **OAuth App** trên GitHub trước:
 
 1. Mở <https://github.com/settings/developers> → **OAuth Apps** →
    **New OAuth App**.
 2. Application name: `PixiJS GitHub Sync` (tên gì cũng được).
-   Homepage URL: `http://127.0.0.1:17321` — **không cần** Authorization
-   callback URL (Device Flow không dùng callback).
-3. Tạo xong, copy **Client ID** (dạng `Ov23li...`, **không phải** Client Secret).
-4. Chạy bridge kèm Client ID:
+   Homepage URL: `http://127.0.0.1:17321`.
+   **Authorization callback URL: `http://127.0.0.1:17321/api/github/oauth/callback`**
+   (bắt buộc cho "Kết nối GitHub"; Device Flow không dùng callback nhưng
+   cứ điền để dùng chung một App cho cả hai).
+3. Tạo xong, copy **Client ID** (dạng `Ov23li...`) và **Client Secret**
+   (bấm **Generate a new client secret** — chỉ hiện một lần).
+
+Rồi nhập 2 giá trị này vào bridge bằng **1 trong 2 cách**:
+
+- **Cách dễ nhất — nhập trong dashboard:** mở dashboard → mục đăng nhập →
+  form **OAuth App** → dán Client ID + Client Secret → **Save**. Bridge
+  lưu vào file `bridge/.github-oauth.json` (mode 0600, đã gitignore) và
+  **không bao giờ trả lại cho extension**.
+- **Hoặc chạy bridge kèm biến môi trường:**
 
 ```bash
-GITHUB_CLIENT_ID=Ov23liXXXXXXXXXXXXXXXX node bridge-server.js
+GITHUB_OAUTH_CLIENT_ID=Ov23liXXXXXXXXXXXXXXXX GITHUB_OAUTH_CLIENT_SECRET=YYYYYYYYYYYYYYYYYYYY node bridge-server.js
 ```
 
-Không có `GITHUB_CLIENT_ID` thì nút Device Flow trong dashboard sẽ báo lỗi
-và hướng dẫn tạo OAuth App — các tính năng khác vẫn chạy bình thường.
+Không có Client ID/Secret thì nút "Kết nối GitHub" và Device Flow trong
+dashboard sẽ báo lỗi và hướng dẫn tạo OAuth App — đăng nhập bằng PAT và
+các tính năng khác vẫn chạy bình thường.
 
 ---
 
@@ -200,9 +215,26 @@ chu kỳ tự động.
 
 Mở **dashboard** (bấm **Open Workspace** trong popup, hoặc
 `chrome://extensions` → Details → **Extension options**). Nếu chưa đăng nhập,
-đầu trang sẽ có khung **Sign in to GitHub** với 2 cách:
+đầu trang sẽ có khung **Sign in to GitHub** với 3 cách:
 
-### Cách 1 — Personal Access Token (khuyên dùng)
+### Cách 1 — Kết nối GitHub bằng tài khoản thật (OAuth Web Flow, khuyên dùng)
+
+1. Tạo OAuth App một lần duy nhất và nhập Client ID + Client Secret vào
+   dashboard (mục 3, cuối — chỉ làm 1 lần, làm xong thì nút này mới bật).
+2. Trong dashboard bấm nút lớn **CONNECT GITHUB**.
+3. Một tab mới mở ra trang **github.com/login/oauth/authorize** — đăng nhập
+   bằng tài khoản GitHub thật của bạn (nếu chưa đăng nhập) rồi bấm
+   **Authorize** cho App `PixiJS GitHub Sync`.
+4. GitHub tự chuyển về bridge (`http://127.0.0.1:17321/api/github/oauth/callback`),
+   bridge đổi mã lấy token và lưu như PAT. Tab báo "Đã kết nối GitHub ✓" —
+   đóng tab, dashboard tự hiện avatar + tên của bạn (chip ghi "via OAuth Web").
+5. Token có scope `repo` + `read:user` — đủ để xem/sửa repo của bạn.
+
+> **An toàn:** link đăng nhập có mã chống giả mạo (`state`) dùng một lần,
+> hết hạn sau 10 phút. Bridge không bao giờ ghi token hay Client Secret ra
+> log, không trả chúng cho extension (xem mục 12).
+
+### Cách 2 — Personal Access Token
 
 1. Tạo token trên GitHub:
    - **Classic token:** <https://github.com/settings/tokens> → **Generate new
@@ -225,9 +257,10 @@ Mở **dashboard** (bấm **Open Workspace** trong popup, hoặc
 > **không trả lại cho extension** — extension chỉ nhận tên + avatar của bạn
 > (xem mục 12).
 
-### Cách 2 — OAuth Device Flow (không cần dán token)
+### Cách 3 — OAuth Device Flow (không cần dán token)
 
-1. Cần chạy bridge với `GITHUB_CLIENT_ID` (mục 3, cuối).
+1. Cần cấu hình OAuth App (mục 3, cuối — chỉ cần Client ID, không cần Secret
+   cho cách này).
 2. Trong dashboard bấm **Sign in with device code** → hiện mã 6 ký tự
    (ví dụ `ABCD-EFGH`) + nút **Open github.com/login/device**.
 3. Mở link, đăng nhập GitHub, nhập mã → bấm **Authorize**.
@@ -317,8 +350,22 @@ Thanh **Auto-update** nằm ngay trên danh sách repo:
 6. Thanh trạng thái hiện: **Lần kiểm tra cuối** (giờ), **Cập nhật tiếp theo
    sau …s**, và **tổng số lần phát hiện cập nhật**.
 
-> **Lưu ý:** auto-update chỉ **phát hiện** commit mới, không tự pull code về
-> máy. Muốn lấy code mới về repo local, dùng nút **Pull** ở tab Local Git
+### Auto-sync — tự pull khi remote có commit mới (v2.1, tuỳ chọn)
+
+Bật thêm công tắc **Auto-sync** trong thanh auto-update (chỉ bật được khi
+auto-update đang bật):
+
+- Khi auto-update phát hiện repo GitHub tương ứng với repo local của bạn
+  (cùng `owner/repo` với remote `origin`) có commit mới, bridge **tự pull**
+  (merge) về repo local.
+- Chỉ pull khi **working tree đang sạch** (không có file chưa commit).
+  Nếu tree đang bẩn, bridge bỏ qua lần đó và ghi rõ lý do ("Working tree
+  has uncommitted changes") — không bao giờ tự merge đè lên thay đổi của bạn.
+- Kết quả lần auto-sync gần nhất hiện trong thanh auto-update
+  (pull được mấy commit / bị bỏ qua vì sao).
+
+> **Lưu ý:** auto-update chỉ **phát hiện** commit mới; muốn lấy code mới về
+> repo local mà không bật auto-sync, dùng nút **Pull** ở tab Local Git
 > (mục 9).
 
 ---
@@ -334,14 +381,46 @@ trên máy bạn** (không cần đăng nhập GitHub).
 2. **Trạng thái:** branch hiện tại, remote, số file thay đổi.
 3. **Changes:** danh sách file đổi — bấm **Diff** để xem khác biệt,
    **Stage** / **Unstage** từng file, **Stage all** / **Unstage all**.
-4. **Commit:** nhập message → **Commit**.
-5. **Fetch / Pull / Push:** nút riêng từng thao tác. Pull chỉ fast-forward
-   (an toàn — không tự merge gây conflict). Push tự gắn upstream (`-u`) lần đầu.
-6. **Branches:** xem danh sách branch, chuyển branch, xem lịch sử commit
-   (**Load history**).
+   Panel **Diff summary** hiện số dòng thêm/xoá của từng file (worktree và
+   staged riêng).
+4. **Commit:** nhập message → **Commit**. Tick **Amend** để sửa commit gần
+   nhất (đổi message, không tạo commit mới); tick **Commit all** để commit
+   luôn mọi file đã đổi mà không cần stage tay.
+5. **Push / Pull mở rộng (panel Sync):**
+   - Huy hiệu **ahead/behind** (ví dụ `↑2 ↓1`) hiện ngay trên panel — số
+     commit local chưa push / số commit remote chưa pull, cập nhật sau mỗi
+     thao tác.
+   - **Pull:** chọn chế độ **Merge** (mặc định, `git pull --no-rebase`),
+     **Rebase** (`--rebase`, xếp commit local lên trên commit remote) hoặc
+     **FF-only** (chỉ pull khi fast-forward được, từ chối nếu đã rẽ nhánh).
+     Chọn remote + branch nguồn. Kết quả báo số commit kéo về, file đổi,
+     có fast-forward không. Nếu pull gây **conflict**, panel Merge &
+     Conflicts hiện danh sách file conflict để xử lý (xem dưới).
+   - **Push:** push branch hiện tại; tick **Set upstream** để gắn
+     `origin/<branch>` lần đầu; **Push all branches** để push mọi branch;
+     **Push tags** để push tag. **Force push** chỉ dùng
+     `--force-with-lease` (không bao giờ dùng `--force` trần) và **bắt buộc
+     tick checkbox xác nhận** trong UI thì bridge mới nhận.
+   - **Sync (1 nút):** làm liền **fetch → pull → push**, hiện từng bước
+     (bước nào lỗi thì dừng ở đó, báo rõ lỗi) — khỏi bấm 3 nút.
+6. **Branches:** xem danh sách branch local + remote, chuyển branch, tạo
+   branch mới (từ branch nào, checkout ngay hay không), đổi tên, xoá
+   (local, có tick xoá cả trên remote, tick force khi cần).
+7. **Merge & xử lý conflict:** nhập tên branch → **Merge**. Merge sạch thì
+   xong; nếu conflict: danh sách file conflict hiện ra, mỗi file bấm
+   **Ours** (giữ bản của mình) hoặc **Theirs** (lấy bản remote); resolve
+   hết thì bấm **Commit merge**. Không muốn merge nữa thì **Abort merge**.
+8. **Stash:** tạo stash (kèm message), xem danh sách, **Apply** (giữ stash),
+   **Pop** (lấy ra rồi xoá stash), **Drop** (xoá stash).
+9. **Remotes:** xem danh sách remote (tên + URL), thêm remote, đổi URL,
+   xoá remote.
+10. **Clone:** nhập URL repo (GitHub hoặc bất kỳ URL git nào) + thư mục đích
+    (+ branch, tuỳ chọn) → **Clone**; xong bridge tự chọn repo vừa clone.
+11. **History:** xem lịch sử commit có phân trang (**Prev/Next**).
 
 > Mọi lệnh Git chạy bằng `spawn('git', …, { shell: false })` — không qua
-> shell nên không sợ injection từ tên file/branch.
+> shell nên không sợ injection từ tên file/branch. URL/branch/remote đều
+> được kiểm tra trước khi chạy.
 
 ---
 
@@ -350,9 +429,11 @@ trên máy bạn** (không cần đăng nhập GitHub).
 Bấm icon extension bất cứ lúc nào để mở popup:
 
 - Đèn trạng thái bridge + nút **Reconnect**.
-- **Chip GitHub:** avatar + tên đăng nhập (hoặc nút **Sign in** mở dashboard).
-- **Repo local:** tên repo + branch.
-- Nút Git nhanh: **Status / Fetch / Pull / Push** (áp dụng cho repo local).
+- **Chip GitHub:** avatar + tên đăng nhập + phương thức đăng nhập
+  ("via OAuth Web" / "via PAT" / "via Device Flow") — hoặc nút **Sign in**
+  mở dashboard.
+- **Repo local:** tên repo + branch + huy hiệu ahead/behind (`↑n ↓m`).
+- Nút Git nhanh: **Status / Fetch / Pull / Push / Sync** (áp dụng cho repo local).
 - **Auto-update:** bật/tắt + khoảng thời gian (đồng bộ với dashboard).
 - **Bridge token:** đổi token khi cần (mục 13).
 - **Open Workspace:** mở dashboard đầy đủ.
@@ -370,8 +451,8 @@ Extention-github-desktop/
 ├── README.md                      # File này
 ├── .gitignore                     # .bridge-token, .bridge-state.json, .github-config.json, ...
 ├── bridge/
-│   ├── bridge-server.js           # Bridge v2: Git local + GitHub API + SSE + auto-update
-│   ├── package.json               # version 2.0.0, scripts start/test/test:all
+│   ├── bridge-server.js           # Bridge v2.1: Git local + GitHub API + SSE + auto-update + auto-sync
+│   ├── package.json               # version 2.1.0, scripts start/test/test:v21/test:all
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   └── start-windows.bat          # Chạy bridge (Windows)
 ├── extension/
@@ -380,13 +461,14 @@ Extention-github-desktop/
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 4 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 5 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
+│   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
 │   ├── extension-test.js          # Test Git local v1 (cần bridge chạy)
 │   ├── validate-manifest.js       # Kiểm tra cả 2 manifest
 │   └── load-from-root-test.js     # Kiểm tra Load unpacked từ root/extension
 └── docs/
-    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2 + số liệu test
+    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1 + số liệu test
 ```
 
 ---
@@ -396,17 +478,19 @@ Extention-github-desktop/
 | Token | Lưu ở đâu | Ai thấy được |
 |---|---|---|
 | **Token GitHub (PAT/OAuth)** | `bridge/.github-config.json` trên máy bạn, mode 0600, đã gitignore | Chỉ bridge (đọc file) — **không gửi cho extension, không log, không commit** |
+| **OAuth App Client Secret** | `bridge/.github-oauth.json` trên máy bạn, mode 0600, đã gitignore (hoặc biến môi trường `GITHUB_OAUTH_CLIENT_SECRET`) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
 | **Token bridge** | `bridge/.bridge-token` trên máy bạn, mode 0600, đã gitignore; bản copy trong `chrome.storage` của extension | Extension (để gọi API bridge), bạn (copy từ terminal) |
 | **Cài đặt** (URL bridge, repo local, auto-update) | `chrome.storage` | Chỉ extension |
 
-- Extension **không bao giờ** giữ token GitHub thô. Mọi lệnh GitHub đều đi
-  qua bridge; bridge gắn token khi gọi `api.github.com`.
+- Extension **không bao giờ** giữ token GitHub thô hay Client Secret. Mọi lệnh
+  GitHub đều đi qua bridge; bridge gắn token khi gọi `api.github.com`.
 - Bridge chỉ nghe trên **127.0.0.1** (localhost) — máy khác trong mạng không
   kết nối được.
-- **Đừng bao giờ** commit file `.github-config.json`, `.bridge-token`,
-  `.bridge-state.json` lên GitHub, đừng gửi token qua chat/email, đừng dán
-  token vào issue công khai. Lỡ lộ token GitHub → vào
+- **Đừng bao giờ** commit file `.github-config.json`, `.github-oauth.json`,
+  `.bridge-token`, `.bridge-state.json` lên GitHub, đừng gửi token/secret qua
+  chat/email, đừng dán chúng vào issue công khai. Lỡ lộ token GitHub → vào
   <https://github.com/settings/tokens> → **Revoke** ngay rồi tạo token mới.
+  Lỡ lộ Client Secret → vào OAuth App → **Generate a new client secret**.
 
 ---
 
@@ -420,7 +504,7 @@ Extention-github-desktop/
    (mục 3).
 2. Kiểm tra bridge có đang nghe không: mở trình duyệt, vào
    `http://127.0.0.1:17321/health` — phải thấy JSON `{"ok":true,
-   "version":"2.0.0", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
+   "version":"2.1.0", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
 3. Nếu dùng cổng khác (biến `BRIDGE_PORT`): sửa **Bridge URL** trong popup
    cho khớp (ví dụ `http://127.0.0.1:18080`).
 4. Bấm **Reconnect** trong popup/dashboard.
@@ -473,11 +557,54 @@ không khớp — copy token mới từ terminal bridge" thay vì chỉ báo chu
 4. Mở DevTools của dashboard (F12) → tab Console xem lỗi; hoặc xem log
    trong terminal bridge.
 
+### "Kết nối GitHub" báo "OAuth Web Flow is not configured"
+
+- Bridge chưa có Client ID + Client Secret của OAuth App. Làm theo mục 3,
+  cuối (tạo OAuth App rồi nhập vào form trong dashboard) — nhớ điền đúng
+  **Authorization callback URL**:
+  `http://127.0.0.1:17321/api/github/oauth/callback` (sai URL này thì
+  GitHub sẽ từ chối redirect sau khi đăng nhập).
+- Kiểm tra trạng thái trong dashboard (mục đăng nhập): phải hiện
+  "OAuth App: configured". Chưa hiện → kiểm tra lại Client ID/Secret đã dán.
+- Cách nhanh để kiểm tra: vào `http://127.0.0.1:17321/api/github/oauth/status`
+  (cần bridge token) — xem `configured: true` chưa.
+
+### Đăng nhập OAuth xong tab báo "Phiên đăng nhập đã hết hạn hoặc không hợp lệ"
+
+- Mã `state` chỉ dùng được **1 lần** và hết hạn sau **10 phút**. Bấm lại nút
+  **Connect GitHub** trong dashboard để lấy link mới, đừng dùng lại link cũ,
+  đừng bấm F5 ở trang callback.
+- Nếu bấm Authorize trên github.com mà tab callback báo lỗi đổi code:
+  kiểm tra Client Secret đã đúng chưa (Secret sai → GitHub từ chối đổi mã).
+
+### Pull / Sync báo conflict — file conflict hiện ra
+
+- Đây không phải lỗi: remote và local cùng sửa một file. Vào tab Local Git
+  → panel **Merge & Conflicts** → mỗi file bấm **Ours** (giữ bản local)
+  hoặc **Theirs** (lấy bản remote) → resolve hết → **Commit merge** →
+  **Push**.
+- Không muốn merge nữa: bấm **Abort merge** để về trạng thái trước khi merge.
+
+### Push báo "non-fast-forward" / "rejected"
+
+- Remote có commit mà local chưa có (ai đó push trước). Bấm **Pull** (hoặc
+  **Sync**) trước, xử lý conflict nếu có, rồi **Push** lại.
+- Muốn ghi đè lịch sử remote: tick **Force-push with lease** + tick
+  **xác nhận** trong panel Push rồi bấm Push (bridge chỉ cho
+  `--force-with-lease`, không bao giờ dùng `--force` trần).
+
+### Pull --ff-only báo lỗi "Not possible to fast-forward"
+
+- Branch đã rẽ nhánh (local và remote đều có commit riêng). Đổi chế độ Pull
+  sang **Merge** hoặc **Rebase** rồi pull lại.
+
 ### Device Flow báo "Device Flow is not configured"
 
-- Bridge đang chạy **không có** `GITHUB_CLIENT_ID`. Dừng bridge, chạy lại
-  với `GITHUB_CLIENT_ID=...` (mục 3, cuối), rồi thử lại.
-- Hoặc dùng cách 1 (dán PAT) — không cần Client ID.
+- Bridge đang chạy **không có** Client ID của OAuth App. Nhập Client ID vào
+  form OAuth App trong dashboard (mục 3, cuối), hoặc chạy bridge với
+  `GITHUB_OAUTH_CLIENT_ID=...`, rồi thử lại.
+- Hoặc dùng cách 1 (Kết nối GitHub) / cách 2 (dán PAT) — không cần Client ID
+  cho PAT.
 
 ### Bridge báo "port already in use" (EADDRINUSE)
 
@@ -498,7 +625,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 4 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 5 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -510,6 +637,7 @@ Chạy lẻ từng test:
 node tests/validate-manifest.js      # 18 checks: cả 2 manifest hợp lệ, cùng version
 node tests/load-from-root-test.js    # 7 checks: Load unpacked từ root và từ extension/
 node tests/bridge-v2-test.js         # 58 checks: mock GitHub + bridge thật + dashboard trong vm
+node tests/bridge-v21-test.js        # 107 checks: push/pull trên repo git thật + OAuth Web Flow + auto-sync
 node tests/extension-test.js         # 22 checks: Git local v1 (CẦN bridge đang chạy ở 17321)
 ```
 
@@ -518,9 +646,19 @@ node tests/extension-test.js         # 22 checks: Git local v1 (CẦN bridge đa
 | Suite | Vòng 1 | Vòng 2 |
 |---|---|---|
 | `bridge-v2-test.js` | 58 passed, 0 failed | 58 passed, 0 failed |
+| `bridge-v21-test.js` | 107 passed, 0 failed | 107 passed, 0 failed |
 | `extension-test.js` | ALL CHECKS PASSED (22) | ALL CHECKS PASSED (22) |
 | `validate-manifest.js` | 18/18 | 18/18 |
 | `load-from-root-test.js` | 7/7 | 7/7 |
+
+`bridge-v21-test.js` kiểm tra bằng repo git thật (bare remote + 2 clone):
+pull merge/rebase/ff-only, push upstream/--all/tags/force-with-lease,
+sync 1 nút, ahead/behind, branch tạo/đổi tên/xoá (local + remote), merge
+conflict thật + resolve ours/theirs + abort, stash, commit --amend, log
+phân trang, diff summary, remotes, clone; OAuth Web Flow với GitHub giả
+(authorize URL đúng dạng + state, callback sai state/code bị từ chối,
+state dùng lại bị từ chối, token/secret không rò ra ngoài); auto-sync
+kéo commit mới về thật và bỏ qua khi tree đang bẩn.
 
 `bridge-v2-test.js` kiểm tra cả kịch bản quan trọng nhất của v2: **giết bridge
 giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động lại bridge
@@ -528,12 +666,14 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ### Kiểm tra bằng tay với GitHub thật (tuỳ chọn)
 
-1. Chạy bridge, load extension, đăng nhập bằng PAT thật (mục 6).
+1. Chạy bridge, load extension, đăng nhập bằng tài khoản thật (mục 6, cách 1).
 2. Tab Repositories phải hiện đủ repo (kiểm tra số lượng với github.com).
 3. Bật auto-update 15 s → push một commit lên một repo từ máy khác →
    trong vòng ~30 s dashboard phải hiện badge NEW ở repo đó.
 4. Tắt terminal bridge → dashboard chuyển vàng/đỏ → mở bridge lại →
    dashboard tự xanh lại.
+5. Tab Local Git: thử Pull (đổi chế độ Merge/Rebase), Push, Sync, tạo
+   branch mới rồi push, tạo conflict rồi resolve bằng Ours/Theirs.
 
 ---
 
@@ -555,6 +695,16 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v2.1.0 (2026-11-23)** — Mở rộng push/pull + đăng nhập bằng tài khoản
+  GitHub thật: OAuth Web Application Flow (nút "Kết nối GitHub", đăng nhập
+  trên github.com, callback về bridge, state chống CSRF dùng một lần,
+  Client Secret lưu file local 0600); pull merge/rebase/ff-only, push
+  upstream/--all/tags/--force-with-lease (cần xác nhận), sync 1 nút,
+  ahead/behind, branch tạo/đổi tên/xoá (local + remote), merge + xử lý
+  conflict (ours/theirs/abort), stash, commit --amend/--all, log phân
+  trang, diff summary, remotes, clone từ URL; auto-sync (tự pull khi
+  remote có commit mới, bỏ qua khi tree bẩn). Xem `docs/BRIDGE_V2.md`
+  (mục v2.1.0).
 - **v2.0.0 (2026-11-23)** — Viết lại toàn bộ: đăng nhập GitHub (PAT +
   OAuth Device Flow), API GitHub đầy đủ (list/search/detail/branches/
   commits/files/README/issues/PRs), dashboard kiểu github.com, auto-update

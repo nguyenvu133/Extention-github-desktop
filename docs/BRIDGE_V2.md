@@ -292,3 +292,127 @@ Popup: CONNECTED, lamp ok, token accepted, version v2.0.0, tên repo.
 - **Không test nào gọi `api.github.com` thật.** Muốn test với GitHub thật:
   chạy bridge, đăng nhập bằng PAT thật trong dashboard, rồi kiểm tra thủ công
   theo README (mục "Kiểm tra bằng tay").
+
+---
+
+## 5. v2.1.0 — Mở rộng push/pull + đăng nhập bằng tài khoản GitHub thật
+
+> Phiên bản: **2.1.0** · Ngày: 2026-11-23 · Head trước khi làm: `6db537d` (v2.0.0)
+> Giữ nguyên toàn bộ tính năng v2.0.0, chỉ thêm mới.
+
+### 5.1. OAuth Web Application Flow — "Kết nối GitHub" (cách chính)
+
+- `GET /api/github/oauth/start` (cần bridge token): tạo `state` ngẫu nhiên
+  (48 ký tự hex, dùng một lần, hết hạn 10 phút), trả `authorizeUrl`
+  (`github.com/login/oauth/authorize?client_id=…&redirect_uri=http://127.0.0.1:17321/api/github/oauth/callback&scope=repo read:user&state=…`).
+  Dashboard mở URL này bằng `chrome.tabs.create`, rồi poll
+  `GET /api/github/user` mỗi 2 s (tối đa 5 phút) cho tới khi đăng nhập xong
+  (SSE `github-auth` cũng báo).
+- `GET /api/github/oauth/callback` (public — là redirect từ trình duyệt nên
+  không mang bridge token; bù lại: server chỉ nghe 127.0.0.1 + kiểm tra
+  `state` dùng một lần + hết hạn): đổi `code` lấy access token bằng
+  Client ID + Client Secret, kiểm tra `GET /user`, lưu như PAT với
+  `authMethod: 'oauth-web'`, phát SSE `github-auth`, trả trang HTML báo
+  thành công ("Đã kết nối GitHub ✓", hiện login, không chứa token/secret).
+  Sai state → 400; code sai → 400; state dùng lại → 400.
+- `GET /api/github/oauth/status` (đã cấu hình OAuth App chưa, đã đăng nhập
+  chưa, bằng cách nào), `POST /api/github/oauth/config` (lưu Client ID +
+  Secret vào `bridge/.github-oauth.json` mode 0600, không bao giờ trả secret
+  về), `GET /api/github/user` (profile + `authMethod` + `scopes`).
+- Client ID/Secret lấy từ biến môi trường (`GITHUB_OAUTH_CLIENT_ID` /
+  `GITHUB_OAUTH_CLIENT_SECRET`, `GITHUB_CLIENT_ID` cũ vẫn dùng được làm
+  alias) hoặc từ file config — env thắng file. Device Flow cũng dùng chung
+  Client ID này.
+- `ghConfig` thêm `authMethod` (`pat` | `device` | `oauth-web`) + `scopes`
+  (đọc từ header `x-oauth-scopes` của `GET /user`); `/health` báo thêm
+  `oauthWebAvailable` + `authMethod`.
+
+### 5.2. Push/pull mở rộng (bridge, qua git CLI, `shell: false`)
+
+| Nhóm | Route mới / mở rộng | Ghi chú |
+|---|---|---|
+| Pull | `POST /api/git/pull` `{mode: merge\|rebase\|ff-only, remote, branch}` | Merge truyền `--no-rebase` tường minh (git mới từ chối pull khi rẽ nhánh nếu không chỉ rõ); trả `changedFiles`, `commitsPulled`, `fastForward`; conflict trả HTTP 200 `{ok:false, conflict:true, conflicts}` |
+| Push | `POST /api/git/push` `{remote, branch, setUpstream, force, confirm, pushAll, tags}` | Force chỉ là `--force-with-lease` và chỉ khi `confirm=true`, nếu không bridge trả 400 |
+| Sync | `POST /api/git/sync` `{mode, remote, branch}` | fetch → pull → push, báo từng bước; cả 3 bước lỗi đều trả HTTP 200 kèm `steps` |
+| Ahead/behind | `GET /api/git/ahead-behind` | `{branch, upstream, ahead, behind, hasUpstream}` qua `rev-list --left-right --count` |
+| Branch | `POST /api/git/branch/create|rename|delete`, `GET /api/git/branches` (thêm `remoteBranches` + `current`) | Xoá được cả remote (`deleteRemote`), xoá branch hiện tại bị từ chối |
+| Merge/conflict | `POST /api/git/merge`, `GET /api/git/conflicts`, `POST /api/git/conflict/resolve` `{path, side: ours\|theirs}`, `POST /api/git/merge/abort` | Resolve = `checkout --ours/--theirs` + `add`; commit merge được phép khi không còn gì staged (trường hợp ours == HEAD) |
+| Stash | `POST /api/git/stash/create`, `GET /api/git/stash/list`, `POST /api/git/stash/apply` `{index, pop}`, `POST /api/git/stash/drop` | Stash rỗng → 400 "Nothing to stash" |
+| Commit | `POST /api/git/commit` thêm `{amend, all}` | `--amend` đổi message không thêm commit; `all` = `add -A` trước |
+| Log/diff | `GET /api/git/log?page&per_page`, `GET /api/git/diff/summary` | Log phân trang; diff summary trả insertions/deletions từng file (worktree + staged) |
+| Remote | `GET /api/git/remotes`, `POST /api/git/remote/add|remove|set-url` | Đọc URL thô từ `git config` (không qua `git remote -v`, vì `-v` áp dụng `url.insteadOf` làm sai URL hiển thị) |
+| Clone | `POST /api/git/clone` `{url, path, branch?}` | Đặt trước guard `repoPath` (chưa cần chọn repo); thư mục đích phải chưa tồn tại hoặc rỗng; xong tự chọn repo vừa clone |
+
+Hàm dùng chung `pullRepo()` / `pushRepo()` (để auto-sync dùng đúng một
+hành vi với route). `commitsPulled` đếm bằng `old HEAD .. FETCH_HEAD`
+(chỉ commit từ remote), không đếm merge commit hay commit local bị rebase.
+
+### 5.3. Auto-sync (tuỳ chọn)
+
+- `POST /api/github/auto-update` nhận thêm `{autoSync}`; status thêm
+  `autoSync` + `lastAutoSync`.
+- Khi tick auto-update phát hiện repo GitHub trùng với `origin` của repo
+  local (so bằng owner/repo trích từ remote URL) có commit mới:
+  chỉ pull (merge) khi working tree đang sạch; tree bẩn → bỏ qua, ghi rõ
+  lý do, không merge. Kết quả phát qua SSE event `auto-sync`.
+- `remoteUrl()` đổi sang đọc `git config --get remote.origin.url` thay vì
+  `git remote get-url` (cái sau áp dụng `url.insteadOf` nên auto-sync
+  không nhận ra remote GitHub khi user dùng mirror local).
+
+### 5.4. Bug thật bắt được khi test (3 lỗi)
+
+1. **Pull merge trên branch rẽ nhánh bị git từ chối** — git mới yêu cầu
+   chỉ rõ cách reconcile ("You have divergent branches…"). Sửa: merge mode
+   truyền `--no-rebase` tường minh.
+2. **`runGit` chỉ giữ stderr khi lỗi** — `git pull` in tóm tắt fetch ra
+   stderr nhưng in `CONFLICT (content)…` ra stdout, nên bridge không nhận
+   ra conflict mà trả lỗi chung chung. Sửa: gộp stdout + stderr vào
+   `error.message` (giữ `gitStderr` riêng như cũ).
+3. **Commit merge sau khi resolve "ours" bị chặn** — resolve ours có thể
+   cho ra index giống hệt HEAD (không còn gì staged) nhưng commit merge
+   vẫn cần được tạo. Sửa: route commit cho qua khi `MERGE_HEAD` tồn tại.
+
+### 5.5. File đã sửa / tạo (v2.1.0)
+
+- Sửa: `bridge/bridge-server.js` (1.483 → ~2.300 dòng), `extension/dashboard.js`
+  (1.130 → 1.746 dòng), `extension/dashboard.html`, `extension/dashboard.css`,
+  `extension/popup.js`, `extension/popup.html`, `extension/popup.css`,
+  `bridge/package.json`, `tests/run-all.js`, `tests/bridge-v2-test.js`
+  (2 check version 2.0.0 → 2.1.0), `README.md`, `docs/BRIDGE_V2.md`,
+  `manifest.json` + `extension/manifest.json` (2.0.0 → 2.1.0),
+  `.gitignore` (thêm `.github-oauth.json` vào danh sách cấm commit).
+- Mới: `tests/bridge-v21-test.js` (107 checks).
+
+### 5.6. Kiểm thử v2.1 — số liệu từng vòng
+
+`tests/bridge-v21-test.js` (node, mock GitHub local, repo git thật:
+bare remote + 2 clone, **không gọi api.github.com thật**):
+
+- **Vòng smoke (script tạm `/tmp/v21-smoke.js`, 36 checks):** 29/36 →
+  phát hiện bug pull `--no-rebase` (mục 5.4.1) → 33/36 → phát hiện bug
+  `runGit` stdout/stderr + commit merge (mục 5.4.2/3) → **36/36**.
+- **Vòng 1 (suite chính thức, 107 checks):** 100/107 → 3 lỗi do
+  `remoteUrl()` đọc URL đã bị `insteadOf` viết lại (sửa: đọc raw config),
+  1 lỗi do test đếm sai amend, 2 lỗi do `commitsPulled` đếm cả merge
+  commit (sửa: đếm qua `FETCH_HEAD`), 1 lỗi do test so HEAD tuyệt đối
+  thay vì kiểm tra ancestor sau merge → sửa xong.
+- **Vòng 2 (chạy lại toàn bộ `run-all.js`):** **ALL SUITES PASSED** —
+  validate-manifest 18/18, load-from-root 7/7, bridge-v2-test 58/58,
+  bridge-v21-test **107/107**, extension-test 22/22.
+- **Vòng 3 (chạy lại `run-all.js` lần 2):** **ALL SUITES PASSED** —
+  kết quả giống hệt vòng 2.
+
+Điểm kiểm thử quan trọng nhất đã pass: **auto-sync thật** — fake GitHub
+báo SHA mới + clone B push commit thật lên bare remote → bridge tự pull
+về repo local (file mới xuất hiện, commit của B thành ancestor của HEAD);
+cây đang bẩn → auto-sync bỏ qua, không merge, file bẩn còn nguyên.
+OAuth Web Flow: authorize URL đúng dạng + state ngẫu nhiên, callback sai
+state/code bị từ chối, state dùng lại bị từ chối, token/secret không xuất
+hiện trong bất kỳ response nào, file `.github-oauth.json` mode 0600.
+
+### 5.7. Chưa kiểm chứng bằng tay
+
+- OAuth Web Flow với tài khoản GitHub thật + OAuth App thật (cần desktop
+  Chrome + tạo OAuth App theo README mục 3/6).
+- Toàn bộ panel Push/Pull mới trên Chrome thật (pull rebase, force-with-lease,
+  resolve conflict bằng tay).

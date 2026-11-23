@@ -24,6 +24,8 @@ header small,.repo small,.status small,.github small{display:block;color:#8ea0b7
 .repo{background:#192536;border:1px solid #2b3b50;border-radius:10px;padding:13px}
 .repo b{display:block;margin-top:9px;font-size:14px;overflow-wrap:anywhere}
 .repo span{display:inline-block;color:#7fc6a2;margin-top:7px;font-size:12px}
+.repo .ahead-behind{background:#243247;border:1px solid #33445b;color:#a9c6f5;border-radius:10px;padding:1px 9px;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-left:6px}
+#ghAuthMethod{color:#7fc6a2}
 .repo p{font-size:11px;color:#91a1b5;overflow-wrap:anywhere;margin:8px 0 0}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
 .grid button{background:#202d40;color:#e8eef7;border:1px solid #33445b;padding:10px;border-radius:7px;cursor:pointer;font-size:11px;font-family:inherit}

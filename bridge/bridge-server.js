@@ -3,44 +3,65 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v2.0.0
+ * v2.1.0
  *
  * A dependency-free local bridge (Node >= 18, only built-in modules) that
  * exposes two things to the companion Chrome extension:
  *
- *   1. LOCAL GIT  - the v1 feature set, unchanged: repository selection,
- *      status, stage/unstage, commit, fetch/pull/push, branches, log, diff.
- *   2. GITHUB API - v2: sign in with a Personal Access Token (or GitHub
- *      OAuth Device Flow), list ALL repositories (paginated), inspect a
- *      repository (branches, commits, file tree, file contents, README,
- *      issues, pull requests), create/update files, and AUTO-UPDATE:
- *      the bridge polls GitHub on a schedule (ETag-aware, so unchanged
- *      polls cost no rate limit) and pushes change events to the
- *      extension over Server-Sent Events.
+ *   1. LOCAL GIT  - v1 feature set + v2.1 push/pull expansion: pull
+ *      (merge / rebase / ff-only), push (upstream / --force-with-lease
+ *      with explicit confirm / --all / tags), one-click sync, ahead/
+ *      behind, branch create/rename/delete (local + remote), merge +
+ *      conflict resolve (ours/theirs) + abort, stash, commit --amend,
+ *      diff summary, paginated log, remotes, and clone from URL.
+ *   2. GITHUB API - v2: sign in with a Personal Access Token, GitHub
+ *      OAuth Device Flow, or (v2.1) OAuth Web Application Flow with a
+ *      real GitHub account; list ALL repositories (paginated), inspect
+ *      a repository (branches, commits, file tree, file contents,
+ *      README, issues, pull requests), create/update files, and
+ *      AUTO-UPDATE: the bridge polls GitHub on a schedule (ETag-aware,
+ *      so unchanged polls cost no rate limit), pushes change events to
+ *      the extension over Server-Sent Events, and (v2.1, opt-in) can
+ *      auto-sync (pull) the local repo when its remote gains commits.
  *
  * Design rules (kept from v1, extended):
  *  - Binds to 127.0.0.1 only; never exposed to the network.
  *  - Every /api/* route requires the bridge bearer token
  *    (Authorization: Bearer <token>, timing-safe compare).
- *  - The GitHub PAT is stored in bridge/.github-config.json (0600,
- *    git-ignored) and is NEVER returned to the extension, never logged.
- *    The extension only ever learns "authed: true/false" + the public
- *    user profile (login, name, avatar_url).
+ *    Exception: /api/github/oauth/callback is a browser redirect from
+ *    github.com, so it cannot carry the token — it is protected by a
+ *    one-time, expiring `state` value instead, and the server only
+ *    listens on 127.0.0.1.
+ *  - The GitHub PAT / OAuth access token is stored in
+ *    bridge/.github-config.json (0600, git-ignored) and is NEVER
+ *    returned to the extension, never logged. The OAuth App
+ *    client_secret lives in bridge/.github-oauth.json (0600,
+ *    git-ignored) and is NEVER returned or logged either. The
+ *    extension only ever learns "authed: true/false" + the public
+ *    user profile (login, name, avatar_url) + the sign-in method.
  *  - Git is always spawned with shell:false (no shell injection).
  *  - Paths are validated as repository-relative (no absolute, no traversal).
- *  - No reset / force-push / arbitrary shell endpoint.
+ *  - No reset / plain --force / arbitrary shell endpoint. The only
+ *    forceful operation is `git push --force-with-lease`, and only when
+ *    the caller passes confirm=true explicitly.
  *  - GitHub requests use the global fetch (Node >= 18) with a timeout and
  *    honour ETag/If-None-Match so auto-update polling is cheap.
  *
  * Environment overrides (useful for tests):
  *  - BRIDGE_PORT          (default 17321)
  *  - BRIDGE_DATA_DIR      directory holding .bridge-token,
- *                         .bridge-state.json and .github-config.json
+ *                         .bridge-state.json, .github-config.json and
+ *                         .github-oauth.json
  *                         (default: the bridge/ folder itself)
  *  - GITHUB_API_BASE      (default https://api.github.com)
  *  - GITHUB_OAUTH_BASE    (default https://github.com)
- *  - GITHUB_CLIENT_ID     OAuth App client id, enables Device Flow.
- *                         Without it, Device Flow answers 400 with setup help.
+ *  - GITHUB_OAUTH_CLIENT_ID / GITHUB_CLIENT_ID
+ *                         OAuth App client id, enables Device Flow and
+ *                         the OAuth Web Flow. Without it, both flows
+ *                         answer 400 with setup help.
+ *  - GITHUB_OAUTH_CLIENT_SECRET
+ *                         OAuth App client secret, needed for the
+ *                         Web Flow token exchange (never logged).
  */
 
 const http = require('http');
@@ -50,7 +71,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -58,9 +79,12 @@ const DATA_DIR = process.env.BRIDGE_DATA_DIR ? path.resolve(process.env.BRIDGE_D
 const TOKEN_FILE = path.join(DATA_DIR, '.bridge-token');
 const STATE_FILE = path.join(DATA_DIR, '.bridge-state.json');
 const GH_CONFIG_FILE = path.join(DATA_DIR, '.github-config.json');
+const GH_OAUTH_FILE = path.join(DATA_DIR, '.github-oauth.json');
 const GITHUB_API_BASE = (process.env.GITHUB_API_BASE || 'https://api.github.com').replace(/\/+$/, '');
 const GITHUB_OAUTH_BASE = (process.env.GITHUB_OAUTH_BASE || 'https://github.com').replace(/\/+$/, '');
-const GITHUB_CLIENT_ID = String(process.env.GITHUB_CLIENT_ID || '').trim();
+const GITHUB_CLIENT_ID = String(process.env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || '').trim();
+const GITHUB_CLIENT_SECRET = String(process.env.GITHUB_OAUTH_CLIENT_SECRET || '').trim();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // a login attempt lives 10 minutes
 
 const GIT_TIMEOUT_MS = 120000; // hard cap so a credential prompt can never hang the bridge
 const GH_TIMEOUT_MS = 20000; // GitHub API calls must fail fast
@@ -91,6 +115,15 @@ function redactToken(value) {
 
 function safeJsonParse(text) {
   try { return JSON.parse(text); } catch (_) { return null; }
+}
+
+function escHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /* ------------------------------------------------------------------ */
@@ -154,7 +187,14 @@ function saveState() {
 /* returned to any client and NEVER logged.                            */
 /* ------------------------------------------------------------------ */
 
-let ghConfig = { token: null, user: null, authedAt: null, autoUpdate: { enabled: false, intervalSeconds: AUTO_UPDATE_DEFAULT_SECONDS } };
+let ghConfig = {
+  token: null,
+  user: null,
+  authedAt: null,
+  authMethod: null, // 'pat' | 'device' | 'oauth-web'
+  scopes: null, // e.g. 'repo, read:user' (from the x-oauth-scopes response header)
+  autoUpdate: { enabled: false, intervalSeconds: AUTO_UPDATE_DEFAULT_SECONDS, autoSync: false },
+};
 
 function loadGhConfig() {
   try {
@@ -165,9 +205,12 @@ function loadGhConfig() {
       token: typeof raw.token === 'string' && raw.token ? raw.token : null,
       user: raw.user && typeof raw.user === 'object' ? raw.user : null,
       authedAt: typeof raw.authedAt === 'string' ? raw.authedAt : null,
+      authMethod: ['pat', 'device', 'oauth-web'].includes(raw.authMethod) ? raw.authMethod : null,
+      scopes: typeof raw.scopes === 'string' && raw.scopes ? raw.scopes : null,
       autoUpdate: {
         enabled: !!(raw.autoUpdate && raw.autoUpdate.enabled),
         intervalSeconds: clampInterval(raw.autoUpdate && raw.autoUpdate.intervalSeconds),
+        autoSync: !!(raw.autoUpdate && raw.autoUpdate.autoSync),
       },
     };
     try { fs.chmodSync(GH_CONFIG_FILE, 0o600); } catch (_) {}
@@ -208,7 +251,80 @@ function publicUser() {
     followers: typeof u.followers === 'number' ? u.followers : null,
     following: typeof u.following === 'number' ? u.following : null,
     created_at: u.created_at || null,
+    authMethod: ghConfig.authMethod || null,
+    scopes: ghConfig.scopes || null,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* OAuth App config (client_id + client_secret for the Web Flow).      */
+/* Stored in bridge/.github-oauth.json (0600, git-ignored). The        */
+/* secret is NEVER returned to any client and NEVER logged.            */
+/* Env vars (GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET)     */
+/* take precedence over the file, so tests and CI can inject them.    */
+/* ------------------------------------------------------------------ */
+
+let oauthAppConfig = { clientId: null, clientSecret: null };
+
+function loadOAuthAppConfig() {
+  try {
+    if (!fs.existsSync(GH_OAUTH_FILE)) return;
+    const raw = safeJsonParse(fs.readFileSync(GH_OAUTH_FILE, 'utf8'));
+    if (!raw || typeof raw !== 'object') return;
+    oauthAppConfig = {
+      clientId: typeof raw.clientId === 'string' && raw.clientId ? raw.clientId : null,
+      clientSecret: typeof raw.clientSecret === 'string' && raw.clientSecret ? raw.clientSecret : null,
+    };
+    try { fs.chmodSync(GH_OAUTH_FILE, 0o600); } catch (_) {}
+  } catch (_) {}
+}
+
+function saveOAuthAppConfig() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(GH_OAUTH_FILE, JSON.stringify(oauthAppConfig, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(GH_OAUTH_FILE, 0o600); } catch (_) {}
+  } catch (err) {
+    log('Could not save OAuth App config:', err.message);
+  }
+}
+
+function oauthClientId() {
+  return GITHUB_CLIENT_ID || oauthAppConfig.clientId || null;
+}
+
+function oauthClientSecret() {
+  return GITHUB_CLIENT_SECRET || oauthAppConfig.clientSecret || null;
+}
+
+function oauthWebConfigured() {
+  return !!(oauthClientId() && oauthClientSecret());
+}
+
+function oauthCallbackUrl() {
+  return `http://${HOST}:${PORT}/api/github/oauth/callback`;
+}
+
+// One-time login states for the Web Flow (state -> createdAt ms).
+// A state is consumed on first use, so a replayed callback is rejected.
+const pendingOAuthStates = new Map();
+
+function mintOAuthState() {
+  const state = crypto.randomBytes(24).toString('hex');
+  pendingOAuthStates.set(state, Date.now());
+  // Opportunistic cleanup of expired states.
+  const now = Date.now();
+  for (const [s, at] of pendingOAuthStates) {
+    if (now - at > OAUTH_STATE_TTL_MS) pendingOAuthStates.delete(s);
+  }
+  return state;
+}
+
+function consumeOAuthState(state) {
+  const at = pendingOAuthStates.get(state);
+  pendingOAuthStates.delete(state);
+  if (!at) return false;
+  return Date.now() - at <= OAUTH_STATE_TTL_MS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -430,8 +546,23 @@ async function ghRequest(apiPath, opts = {}) {
 
 async function ghValidateToken(token) {
   // GET /user both validates the token and returns the public profile.
-  const res = await ghRequest('/user', { token, timeout: GH_TIMEOUT_MS });
-  return res.data;
+  // The x-oauth-scopes header tells the UI which permissions the token has.
+  const ghRes = await ghRequest('/user', { token, timeout: GH_TIMEOUT_MS });
+  const scopes = ghRes.headers && typeof ghRes.headers.get === 'function'
+    ? (ghRes.headers.get('x-oauth-scopes') || '')
+    : '';
+  return { user: ghRes.data, scopes: scopes ? scopes.split(',').map((s) => s.trim()).filter(Boolean).join(', ') : null };
+}
+
+function signInWithToken(token, user, scopes, authMethod) {
+  ghConfig.token = token;
+  ghConfig.user = user;
+  ghConfig.authedAt = new Date().toISOString();
+  ghConfig.authMethod = authMethod;
+  ghConfig.scopes = scopes || null;
+  saveGhConfig();
+  sseBroadcast('github-auth', { authed: true, login: user.login, authMethod, at: ghConfig.authedAt });
+  log(`GitHub signed in as ${user.login} (${authMethod}, scopes: ${scopes || 'unknown'})`);
 }
 
 /* --- normalisers: the extension only ever sees these shapes --- */
@@ -551,6 +682,7 @@ async function fetchAllRepos(force) {
 const autoUpdate = {
   enabled: false,
   intervalSeconds: AUTO_UPDATE_DEFAULT_SECONDS,
+  autoSync: false,
   lastRunAt: null,
   lastChangeAt: null,
   reposChecked: 0,
@@ -559,12 +691,14 @@ const autoUpdate = {
   lastError: null,
   timer: null,
   lastShaByRepo: new Map(), // full_name -> sha
+  lastAutoSync: null, // { at, repo, branch, commitsPulled, error } or null
 };
 
 function autoUpdateStatus() {
   return {
     enabled: autoUpdate.enabled,
     intervalSeconds: autoUpdate.intervalSeconds,
+    autoSync: autoUpdate.autoSync,
     lastRunAt: autoUpdate.lastRunAt,
     lastChangeAt: autoUpdate.lastChangeAt,
     reposChecked: autoUpdate.reposChecked,
@@ -572,6 +706,7 @@ function autoUpdateStatus() {
     nextRunAt: autoUpdate.nextRunAt,
     lastError: autoUpdate.lastError,
     trackedRepos: autoUpdate.lastShaByRepo.size,
+    lastAutoSync: autoUpdate.lastAutoSync,
   };
 }
 
@@ -611,8 +746,15 @@ async function autoUpdateTick(manual) {
       autoUpdate.lastChangeAt = started;
       repoListCache = { at: 0, repos: [] }; // repo list changed: drop the cache
       for (const u of updates) sseBroadcast('repo-updated', u);
+      // v2.1 auto-sync: if the LOCAL repo's remote is one of the repos
+      // that just gained commits, pull it automatically — but only when
+      // the working tree is clean (a dirty tree must never be merged
+      // without the user seeing it) and only when the user opted in.
+      if (autoUpdate.autoSync && repoPath) {
+        await maybeAutoSync(updates, started);
+      }
     }
-    const result = { ok: true, checked, updated: updates, at: started };
+    const result = { ok: true, checked, updated: updates, at: started, autoSync: autoUpdate.lastAutoSync };
     sseBroadcast('auto-update', result);
     return result;
   } catch (err) {
@@ -633,10 +775,11 @@ function scheduleAutoUpdate() {
   if (autoUpdate.timer.unref) autoUpdate.timer.unref();
 }
 
-function setAutoUpdate(enabled, intervalSeconds) {
+function setAutoUpdate(enabled, intervalSeconds, autoSync) {
   autoUpdate.enabled = !!enabled;
   if (intervalSeconds !== undefined) autoUpdate.intervalSeconds = clampInterval(intervalSeconds);
-  ghConfig.autoUpdate = { enabled: autoUpdate.enabled, intervalSeconds: autoUpdate.intervalSeconds };
+  if (autoSync !== undefined) autoUpdate.autoSync = !!autoSync;
+  ghConfig.autoUpdate = { enabled: autoUpdate.enabled, intervalSeconds: autoUpdate.intervalSeconds, autoSync: autoUpdate.autoSync };
   saveGhConfig();
   scheduleAutoUpdate();
   if (autoUpdate.enabled) {
@@ -644,6 +787,59 @@ function setAutoUpdate(enabled, intervalSeconds) {
     setTimeout(() => { autoUpdateTick(false); }, 500).unref?.();
   }
   return autoUpdateStatus();
+}
+
+/**
+ * v2.1 auto-sync: pull the local repo when its GitHub remote gained
+ * commits. Safety rules: only when autoSync is on, only when the
+ * working tree is clean, only merge mode, never force. The outcome
+ * (pulled / skipped / failed) is recorded and broadcast so the UI can
+ * show it; a failure never breaks the auto-update tick.
+ */
+async function maybeAutoSync(updates, at) {
+  try {
+    const origin = await remoteUrl();
+    const ghRepo = origin ? parseGitHubRepoFromUrl(origin) : null;
+    if (!ghRepo) return; // local repo has no GitHub remote — nothing to sync
+    const hit = updates.find((u) => u.repo.toLowerCase() === ghRepo.toLowerCase());
+    if (!hit) return;
+    const dirty = (await runGit(['status', '--porcelain'])).trim();
+    if (dirty) {
+      autoUpdate.lastAutoSync = { at, repo: ghRepo, skipped: true, reason: 'Working tree has uncommitted changes — auto-sync skipped. Commit or stash first.' };
+      sseBroadcast('auto-sync', autoUpdate.lastAutoSync);
+      log(`auto-sync skipped for ${ghRepo}: working tree dirty`);
+      return;
+    }
+    const branch = await currentBranch();
+    if (!branch || branch.startsWith('(')) {
+      autoUpdate.lastAutoSync = { at, repo: ghRepo, skipped: true, reason: 'No branch checked out — auto-sync skipped.' };
+      sseBroadcast('auto-sync', autoUpdate.lastAutoSync);
+      return;
+    }
+    const pulled = await pullRepo({ mode: 'merge', remote: 'origin', branch });
+    autoUpdate.lastAutoSync = { at, repo: ghRepo, branch, commitsPulled: pulled.commitsPulled, changedFiles: pulled.changedFiles, skipped: false };
+    sseBroadcast('auto-sync', autoUpdate.lastAutoSync);
+    log(`auto-sync pulled ${pulled.commitsPulled} commit(s) into ${ghRepo}@${branch}`);
+  } catch (err) {
+    autoUpdate.lastAutoSync = { at, repo: null, skipped: true, reason: `Auto-sync failed: ${err.message}` };
+    sseBroadcast('auto-sync', autoUpdate.lastAutoSync);
+    log('auto-sync failed:', err.message);
+  }
+}
+
+/**
+ * Parse "owner/repo" out of a git remote URL (https or ssh form).
+ * Returns null for non-GitHub remotes.
+ */
+function parseGitHubRepoFromUrl(url) {
+  const s = String(url || '').trim();
+  let m = s.match(/^https?:\/\/[^/]+\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  if (m) return `${m[1]}/${m[2]}`;
+  m = s.match(/^git@[^:]+:([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
+  if (m) return `${m[1]}/${m[2]}`;
+  m = s.match(/^ssh:\/\/git@[^/]+\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  if (m) return `${m[1]}/${m[2]}`;
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -663,13 +859,13 @@ function gitEnv() {
   });
 }
 
-function runGit(args, options = {}) {
+function runGitIn(cwd, args, options = {}) {
   return new Promise((resolve, reject) => {
-    if (!repoPath) return reject(new Error('No repository connected'));
+    if (!cwd) return reject(new Error('No repository connected'));
     let child;
     try {
       child = spawn('git', args, {
-        cwd: repoPath,
+        cwd,
         windowsHide: true,
         shell: false,
         env: gitEnv(),
@@ -707,13 +903,233 @@ function runGit(args, options = {}) {
       finished = true;
       clearTimeout(timer);
       if (code === 0) return resolve(out);
-      const message = (err || out || `git exited with code ${code}`).trim();
+      // Combine stdout + stderr: git splits its output — e.g. `git pull`
+      // prints the fetch summary to stderr and "CONFLICT (content)…"
+      // to stdout. Keeping only one side hides the real failure.
+      const combined = [out, err].map((s) => (s || '').trim()).filter(Boolean).join('\n');
+      const message = combined || `git exited with code ${code}`;
       const error = new Error(message);
       error.gitCode = code;
       error.gitStderr = err;
       reject(error);
     });
   });
+}
+
+function runGit(args, options = {}) {
+  return runGitIn(repoPath, args, options);
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared push/pull helpers (v2.1) — used by the routes AND by         */
+/* auto-sync, so the behaviour is identical everywhere.                */
+/* ------------------------------------------------------------------ */
+
+async function headSha() {
+  try {
+    return (await runGit(['rev-parse', 'HEAD'])).trim() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function conflictedFiles() {
+  try {
+    const raw = await runGit(['diff', '--name-only', '--diff-filter=U']);
+    return raw.split('\n').map((s) => s.trim()).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function isMerging() {
+  try {
+    await runGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD']);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function aheadBehind() {
+  const branch = await currentBranch();
+  if (!branch || branch.startsWith('(')) {
+    return { branch, upstream: null, ahead: 0, behind: 0, hasUpstream: false };
+  }
+  const upstream = await upstreamOf(branch);
+  if (!upstream) {
+    return { branch, upstream: null, ahead: 0, behind: 0, hasUpstream: false };
+  }
+  try {
+    const raw = (await runGit(['rev-list', '--left-right', '--count', `HEAD...@{upstream}`])).trim();
+    const parts = raw.split(/\s+/);
+    return {
+      branch,
+      upstream,
+      ahead: Number(parts[0]) || 0,
+      behind: Number(parts[1]) || 0,
+      hasUpstream: true,
+    };
+  } catch (_) {
+    return { branch, upstream, ahead: 0, behind: 0, hasUpstream: true };
+  }
+}
+
+function validateBranchName(name) {
+  const value = String(name || '').trim();
+  if (!value) throw new Error('Branch name is required');
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..') || value.startsWith('-') ||
+      value.endsWith('/') || value.endsWith('.lock') || value === 'HEAD') {
+    throw new Error(`Invalid branch name: ${value}`);
+  }
+  return value;
+}
+
+function validateRemoteName(name) {
+  const value = String(name || '').trim();
+  if (!value) throw new Error('Remote name is required');
+  if (!/^[A-Za-z0-9._-]+$/.test(value) || value.startsWith('-')) {
+    throw new Error(`Invalid remote name: ${value}`);
+  }
+  return value;
+}
+
+function validateGitUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) throw new Error('Git URL is required');
+  if (/[\s;|&$`\\'"\n\r]/.test(value) || value.startsWith('-')) {
+    throw new Error('Invalid Git URL');
+  }
+  const ok = /^(https?:\/\/|git@|ssh:\/\/|git:\/\/|file:\/\/)/i.test(value) ||
+    value.startsWith('/') || value.startsWith('~/') || value.startsWith('./') || value.startsWith('../') ||
+    /^[A-Za-z]:[\\/]/.test(value);
+  if (!ok) throw new Error('Git URL must start with https://, git@, ssh://, git://, file:// or a local path');
+  return value;
+}
+
+function parseStashList(raw) {
+  const out = [];
+  if (!raw) return out;
+  for (const line of raw.split('\n')) {
+    const m = line.match(/^stash@\{(\d+)\}:\s*(.*)$/);
+    if (m) out.push({ index: Number(m[1]), ref: `stash@{${m[1]}}`, message: m[2] });
+  }
+  return out;
+}
+
+function parseNumstat(raw) {
+  const out = [];
+  if (!raw) return out;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    if (parts.length < 3) continue;
+    out.push({
+      path: parts.slice(2).join('\t'),
+      insertions: parts[0] === '-' ? null : Number(parts[0]) || 0,
+      deletions: parts[1] === '-' ? null : Number(parts[1]) || 0,
+      binary: parts[0] === '-',
+    });
+  }
+  return out;
+}
+
+/**
+ * Pull from a remote. Returns a structured result; a merge conflict is
+ * NOT an exception — it is { ok: false, conflict: true, conflicts } so
+ * the UI can show the conflicted files and offer ours/theirs.
+ */
+async function pullRepo(opts = {}) {
+  const mode = ['merge', 'rebase', 'ff-only'].includes(opts.mode) ? opts.mode : 'merge';
+  const remote = validateRemoteName(opts.remote || 'origin');
+  const branch = opts.branch ? validateBranchName(opts.branch) : null;
+  const current = await currentBranch();
+  if (!current || current.startsWith('(')) throw new Error('Cannot pull: no branch checked out');
+  const targetBranch = branch || current;
+  const upstream = await upstreamOf(current);
+  const oldSha = await headSha();
+
+  const args = ['pull'];
+  if (mode === 'rebase') args.push('--rebase');
+  else if (mode === 'ff-only') args.push('--ff-only');
+  else args.push('--no-rebase'); // merge mode: say so explicitly, or git
+  // refuses divergent branches ("need to specify how to reconcile them").
+  // Plain `git pull` uses the configured upstream; an explicit branch
+  // (or a branch without upstream) needs remote + branch on the command.
+  if (!upstream || branch) args.push(remote, targetBranch);
+
+  let result;
+  try {
+    result = await runGit(args);
+  } catch (err) {
+    const text = `${err.message || ''} ${err.gitStderr || ''}`;
+    if (/CONFLICT/i.test(text) || /Automatic merge failed/i.test(text)) {
+      const conflicts = await conflictedFiles();
+      return {
+        ok: false, conflict: true, conflicts, mode, remote, branch: targetBranch,
+        result: text.trim(),
+      };
+    }
+    throw err;
+  }
+
+  const newSha = await headSha();
+  let changedFiles = [];
+  let commitsPulled = 0;
+  let mergeCommits = 0;
+  if (oldSha && newSha && oldSha !== newSha) {
+    changedFiles = (await runGit(['diff', '--name-only', `${oldSha}..${newSha}`])).split('\n').map((s) => s.trim()).filter(Boolean);
+    mergeCommits = Number((await runGit(['rev-list', '--count', '--merges', `${oldSha}..${newSha}`])).trim()) || 0;
+  }
+  // "Commits pulled" = commits that arrived from the remote in this
+  // pull, measured as old HEAD .. FETCH_HEAD (the head just fetched).
+  // Counting old..new instead would also count the merge commit itself
+  // and, after a rebase, the rewritten local commit — and the
+  // remote-tracking ref is unreliable here because a failed earlier
+  // pull (e.g. --ff-only on diverged branches) already advanced it.
+  let fetchHeadSha = null;
+  try {
+    fetchHeadSha = (await runGit(['rev-parse', 'FETCH_HEAD'])).trim() || null;
+  } catch (_) { fetchHeadSha = null; }
+  if (oldSha && fetchHeadSha) {
+    commitsPulled = Number((await runGit(['rev-list', '--count', `${oldSha}..${fetchHeadSha}`])).trim()) || 0;
+  } else if (fetchHeadSha) {
+    commitsPulled = Number((await runGit(['rev-list', '--count', fetchHeadSha])).trim()) || 0;
+  }
+  return {
+    ok: true, conflict: false, mode, remote, branch: targetBranch,
+    result: (result || '').trim(), changedFiles, commitsPulled,
+    fastForward: commitsPulled > 0 && mergeCommits === 0, newSha,
+  };
+}
+
+/**
+ * Push to a remote. Force push is --force-with-lease ONLY, and only
+ * when the caller passes confirm=true (the UI shows a checkbox for
+ * this). Plain --force is never used.
+ */
+async function pushRepo(opts = {}) {
+  const remote = validateRemoteName(opts.remote || 'origin');
+  const branch = opts.branch ? validateBranchName(opts.branch) : null;
+  const current = await currentBranch();
+  if (!current || current.startsWith('(')) throw new Error('Cannot push: no branch checked out');
+  const targetBranch = branch || current;
+  if (opts.force && opts.confirm !== true) {
+    throw new Error('Force push needs explicit confirmation. Tick the "force-push with lease" confirmation and try again.');
+  }
+  const args = ['push'];
+  if (opts.force) args.push('--force-with-lease');
+  if (opts.pushAll) {
+    args.push(remote, '--all');
+  } else if (opts.tags) {
+    args.push(remote, '--tags');
+  } else {
+    const upstream = await upstreamOf(current);
+    if (opts.setUpstream || !upstream) args.push('-u', remote, targetBranch);
+    else args.push(remote, targetBranch);
+  }
+  const result = await runGit(args);
+  return { ok: true, remote, branch: targetBranch, result: (result || '').trim(), pushed: true };
 }
 
 /* ------------------------------------------------------------------ */
@@ -834,8 +1250,13 @@ async function upstreamOf(branch) {
 }
 
 async function remoteUrl() {
+  // Read the RAW configured URL, not `git remote get-url`:
+  // get-url applies url.insteadOf rewriting (e.g. a local mirror
+  // standing in for github.com), which would hide the real remote
+  // from the UI and from auto-sync's GitHub matching. The raw value
+  // is what the user configured and what we want to display.
   try {
-    return (await runGit(['remote', 'get-url', 'origin'])).trim() || null;
+    return (await runGit(['config', '--get', 'remote.origin.url'])).trim() || null;
   } catch (_) {
     return null;
   }
@@ -878,7 +1299,9 @@ function healthPayload() {
       authed: ghAuthed(),
       login: ghConfig.user ? ghConfig.user.login : null,
       avatar_url: ghConfig.user ? ghConfig.user.avatar_url : null,
-      deviceFlowAvailable: !!GITHUB_CLIENT_ID,
+      authMethod: ghConfig.authMethod || null,
+      deviceFlowAvailable: !!oauthClientId(),
+      oauthWebAvailable: oauthWebConfigured(),
       rateLimit: lastRateLimit,
     },
     autoUpdate: autoUpdateStatus(),
@@ -925,6 +1348,66 @@ async function handle(req, res) {
     return send(req, res, 200, payload);
   }
 
+  /* ---- OAuth Web Flow callback (public by necessity) ----
+   * GitHub redirects the user's BROWSER here after they sign in on
+   * github.com, so no bridge token can travel with the request. The
+   * request is protected instead by the one-time, expiring `state`
+   * value minted by /api/github/oauth/start, and the server only
+   * listens on 127.0.0.1, so only this machine can call it. The
+   * authorization code and the access token are never logged and
+   * never appear in the HTML response. */
+  if (route === '/api/github/oauth/callback' && req.method === 'GET') {
+    const sendHtml = (status, title, bodyHtml) => {
+      const html = `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:560px;margin:60px auto;padding:0 20px;color:#24292f}h1{font-size:22px}.ok{color:#1a7f37}.err{color:#cf222e}code{background:#f6f8fa;padding:2px 6px;border-radius:6px}</style></head><body>${bodyHtml}</body></html>`;
+      res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      res.end(html);
+    };
+    const code = String(url.searchParams.get('code') || '');
+    const state = String(url.searchParams.get('state') || '');
+    const ghError = String(url.searchParams.get('error') || '');
+    const ghErrorDesc = String(url.searchParams.get('error_description') || '');
+    if (ghError) {
+      log('OAuth web flow denied by GitHub:', ghError);
+      return sendHtml(400, 'Đăng nhập thất bại', `<h1 class="err">Đăng nhập GitHub thất bại</h1><p>GitHub từ chối yêu cầu: <b>${escHtml(ghErrorDesc || ghError)}</b></p><p>Bạn có thể đóng tab này và thử lại từ extension.</p>`);
+    }
+    if (!code || !state) {
+      return sendHtml(400, 'Đăng nhập thất bại', '<h1 class="err">Đăng nhập GitHub thất bại</h1><p>Thiếu mã xác nhận từ GitHub. Bạn có thể đóng tab này và thử lại từ extension.</p>');
+    }
+    if (!consumeOAuthState(state)) {
+      log('OAuth web flow: invalid or expired state (possible replay/CSRF attempt)');
+      return sendHtml(400, 'Đăng nhập thất bại', '<h1 class="err">Phiên đăng nhập đã hết hạn hoặc không hợp lệ</h1><p>Mã chống giả mạo (state) sai hoặc đã dùng rồi. Bạn có thể đóng tab này và bấm "Kết nối GitHub" lại từ extension.</p>');
+    }
+    const clientId = oauthClientId();
+    const clientSecret = oauthClientSecret();
+    if (!clientId || !clientSecret) {
+      return sendHtml(400, 'Chưa cấu hình OAuth App', '<h1 class="err">Bridge chưa cấu hình OAuth App</h1><p>Bridge cần Client ID + Client Secret của OAuth App để đổi mã lấy token. Nhập chúng trong dashboard (mục Đăng nhập GitHub) rồi thử lại.</p>');
+    }
+    try {
+      const params = new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        redirect_uri: oauthCallbackUrl(),
+      });
+      const tokenRes = await fetch(`${GITHUB_OAUTH_BASE}/login/oauth/access_token`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}` },
+        body: params.toString(),
+        signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+      });
+      const data = safeJsonParse(await tokenRes.text()) || {};
+      if (!tokenRes.ok || !data.access_token) {
+        throw new Error((data && (data.error_description || data.error)) || 'GitHub did not return an access token');
+      }
+      const { user, scopes } = await ghValidateToken(data.access_token);
+      signInWithToken(data.access_token, user, scopes, 'oauth-web');
+      return sendHtml(200, 'Đăng nhập thành công', `<h1 class="ok">Đã kết nối GitHub ✓</h1><p>Đăng nhập thành công với tài khoản <b>${escHtml(user.login)}</b>${user.name ? ` (${escHtml(user.name)})` : ''}.</p><p>Bạn có thể đóng tab này — dashboard trong extension sẽ tự cập nhật.</p>`);
+    } catch (err) {
+      log('OAuth web flow token exchange failed:', err.message);
+      return sendHtml(400, 'Đăng nhập thất bại', `<h1 class="err">Không đổi được mã lấy token</h1><p>${escHtml(err.message)}</p><p>Bạn có thể đóng tab này và thử lại, hoặc đăng nhập bằng Personal Access Token.</p>`);
+    }
+  }
+
   if (!tokenMatches(req.headers.authorization)) {
     return send(req, res, 401, { error: 'Unauthorized: invalid or missing bridge token' });
   }
@@ -940,23 +1423,19 @@ async function handle(req, res) {
     const token = String(body.token || '').trim();
     if (!token) throw new Error('Paste a Personal Access Token first');
     if (token.length < 20) throw new Error('That does not look like a GitHub token (too short)');
-    const user = await ghValidateToken(token);
-    ghConfig.token = token;
-    ghConfig.user = user;
-    ghConfig.authedAt = new Date().toISOString();
-    saveGhConfig();
-    sseBroadcast('github-auth', { authed: true, login: user.login, at: ghConfig.authedAt });
-    log(`GitHub signed in as ${user.login} (token ${redactToken(token)})`);
+    const { user, scopes } = await ghValidateToken(token);
+    signInWithToken(token, user, scopes, 'pat');
     return send(req, res, 200, { ok: true, user: publicUser() });
   }
 
   if (route === '/api/github/auth/device/start' && req.method === 'POST') {
-    if (!GITHUB_CLIENT_ID) {
+    const clientId = oauthClientId();
+    if (!clientId) {
       throw new Error(
-        'Device Flow is not configured on this bridge. Set GITHUB_CLIENT_ID to your GitHub OAuth App client id and restart the bridge, or sign in with a Personal Access Token instead.'
+        'Device Flow is not configured on this bridge. Create a GitHub OAuth App and save its client id in the dashboard (or set GITHUB_OAUTH_CLIENT_ID and restart the bridge), or sign in with a Personal Access Token instead.'
       );
     }
-    const params = new URLSearchParams({ client_id: GITHUB_CLIENT_ID, scope: GH_SCOPES });
+    const params = new URLSearchParams({ client_id: clientId, scope: GH_SCOPES });
     const res2 = await fetch(`${GITHUB_OAUTH_BASE}/login/device/code`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': `PixiJS-GitHub-Bridge/${VERSION}` },
@@ -977,11 +1456,12 @@ async function handle(req, res) {
   }
 
   if (route === '/api/github/auth/device/poll' && req.method === 'POST') {
-    if (!GITHUB_CLIENT_ID) throw new Error('Device Flow is not configured on this bridge (no GITHUB_CLIENT_ID).');
+    const clientId = oauthClientId();
+    if (!clientId) throw new Error('Device Flow is not configured on this bridge (no OAuth App client id).');
     const deviceCode = String(body.device_code || '').trim();
     if (!deviceCode) throw new Error('device_code is required');
     const params = new URLSearchParams({
-      client_id: GITHUB_CLIENT_ID,
+      client_id: clientId,
       device_code: deviceCode,
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
     });
@@ -993,13 +1473,8 @@ async function handle(req, res) {
     });
     const data = safeJsonParse(await res2.text()) || {};
     if (data.access_token) {
-      const user = await ghValidateToken(data.access_token);
-      ghConfig.token = data.access_token;
-      ghConfig.user = user;
-      ghConfig.authedAt = new Date().toISOString();
-      saveGhConfig();
-      sseBroadcast('github-auth', { authed: true, login: user.login, at: ghConfig.authedAt });
-      log(`GitHub signed in (Device Flow) as ${user.login}`);
+      const { user, scopes } = await ghValidateToken(data.access_token);
+      signInWithToken(data.access_token, user, scopes, 'device');
       return send(req, res, 200, { ok: true, status: 'authorized', user: publicUser() });
     }
     if (data.error === 'authorization_pending') return send(req, res, 200, { ok: true, status: 'pending' });
@@ -1014,6 +1489,8 @@ async function handle(req, res) {
     ghConfig.token = null;
     ghConfig.user = null;
     ghConfig.authedAt = null;
+    ghConfig.authMethod = null;
+    ghConfig.scopes = null;
     autoUpdate.lastShaByRepo.clear();
     repoListCache = { at: 0, repos: [] };
     ghCache.clear();
@@ -1025,6 +1502,75 @@ async function handle(req, res) {
 
   if (route === '/api/github/me' && req.method === 'GET') {
     return send(req, res, 200, { ok: true, authed: ghAuthed(), user: publicUser(), authedAt: ghConfig.authedAt });
+  }
+
+  // v2.1 canonical profile endpoint: same as /me, plus the sign-in
+  // method and granted scopes so the UI can show "Connected with GitHub".
+  if (route === '/api/github/user' && req.method === 'GET') {
+    return send(req, res, 200, {
+      ok: true,
+      authed: ghAuthed(),
+      user: publicUser(),
+      authMethod: ghConfig.authMethod || null,
+      scopes: ghConfig.scopes || null,
+      authedAt: ghConfig.authedAt,
+    });
+  }
+
+  /* ==================== OAUTH WEB FLOW (v2.1) ==================== */
+  // Sign in with a REAL GitHub account in the browser:
+  //   1. dashboard calls /oauth/start -> gets an authorize URL
+  //   2. the user opens it, signs in on github.com, approves the app
+  //   3. GitHub redirects to /oauth/callback on this bridge (127.0.0.1)
+  //   4. the bridge exchanges the code for a token and stores it like
+  //      a PAT. The dashboard learns via SSE + polling /api/github/user.
+
+  if (route === '/api/github/oauth/status' && req.method === 'GET') {
+    return send(req, res, 200, {
+      ok: true,
+      configured: oauthWebConfigured(),
+      clientIdConfigured: !!oauthClientId(),
+      clientSecretConfigured: !!oauthClientSecret(),
+      callbackUrl: oauthCallbackUrl(),
+      authed: ghAuthed(),
+      authMethod: ghConfig.authMethod || null,
+      login: ghConfig.user ? ghConfig.user.login : null,
+    });
+  }
+
+  if (route === '/api/github/oauth/config' && req.method === 'POST') {
+    const clientId = String(body.clientId || body.client_id || '').trim();
+    const clientSecret = String(body.clientSecret || body.client_secret || '').trim();
+    if (!clientId) throw new Error('Client ID is required (from your GitHub OAuth App)');
+    if (!clientSecret) throw new Error('Client Secret is required (from your GitHub OAuth App)');
+    if (clientId.length < 5 || clientSecret.length < 10) throw new Error('Client ID / Client Secret look too short — check what you pasted');
+    oauthAppConfig = { clientId, clientSecret };
+    saveOAuthAppConfig();
+    log('OAuth App configured (client id set, secret stored locally, never returned)');
+    return send(req, res, 200, { ok: true, configured: true, callbackUrl: oauthCallbackUrl() });
+  }
+
+  if (route === '/api/github/oauth/start' && req.method === 'GET') {
+    const clientId = oauthClientId();
+    if (!clientId) {
+      throw new Error(
+        'OAuth Web Flow is not configured. Create a GitHub OAuth App and save its Client ID + Client Secret in the dashboard first, or sign in with a Personal Access Token / Device Flow instead.'
+      );
+    }
+    const state = mintOAuthState();
+    const authorizeUrl = `${GITHUB_OAUTH_BASE}/login/oauth/authorize?` + new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: oauthCallbackUrl(),
+      scope: GH_SCOPES,
+      state,
+      allow_signup: 'true',
+    }).toString();
+    return send(req, res, 200, {
+      ok: true,
+      authorizeUrl,
+      expiresIn: Math.floor(OAUTH_STATE_TTL_MS / 1000),
+      callbackUrl: oauthCallbackUrl(),
+    });
   }
 
   if (route === '/api/github/rate-limit' && req.method === 'GET') {
@@ -1209,7 +1755,8 @@ async function handle(req, res) {
     requireGhAuth();
     const enabled = body.enabled !== undefined ? !!body.enabled : autoUpdate.enabled;
     const intervalSeconds = body.intervalSeconds !== undefined ? clampInterval(body.intervalSeconds) : autoUpdate.intervalSeconds;
-    const status = setAutoUpdate(enabled, intervalSeconds);
+    const autoSync = body.autoSync !== undefined ? !!body.autoSync : autoUpdate.autoSync;
+    const status = setAutoUpdate(enabled, intervalSeconds, autoSync);
     return send(req, res, 200, { ok: true, ...status });
   }
 
@@ -1238,6 +1785,38 @@ async function handle(req, res) {
 
   if (route === '/api/repo/current' && req.method === 'GET') {
     return send(req, res, 200, { ok: true, repository: await repoSummary() });
+  }
+
+  /* ---- clone (v2.1) — needs no repo selected, so it lives above
+   * the repoPath guard. Clones into the requested folder (which must
+   * not exist yet, or be empty), then SELECTS the cloned repo so the
+   * user can work on it immediately. */
+  if (route === '/api/git/clone' && req.method === 'POST') {
+    const gitUrl = validateGitUrl(body.url);
+    const targetInput = String(body.path || '').trim();
+    if (!targetInput) throw new Error('Destination path is required');
+    const target = path.resolve(expandHome(targetInput));
+    const parent = path.dirname(target);
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+      throw new Error(`Parent directory does not exist: ${parent}`);
+    }
+    if (fs.existsSync(target)) {
+      const entries = fs.readdirSync(target);
+      if (entries.length) throw new Error(`Destination already exists and is not empty: ${target}`);
+    }
+    const branch = body.branch ? validateBranchName(body.branch) : null;
+    const args = ['clone'];
+    if (branch) args.push('-b', branch);
+    args.push(gitUrl, target);
+    const result = await runGitIn(parent, args, { timeout: GIT_TIMEOUT_MS });
+    repoPath = target;
+    try {
+      const topLevel = (await runGit(['rev-parse', '--show-toplevel'])).trim();
+      if (topLevel) repoPath = path.resolve(topLevel);
+    } catch (_) {}
+    saveState();
+    log(`Cloned ${gitUrl} into ${repoPath}`);
+    return send(req, res, 200, { ok: true, result: (result || '').trim(), repository: await repoSummary() });
   }
 
   if (!repoPath) {
@@ -1276,12 +1855,14 @@ async function handle(req, res) {
     return send(req, res, 200, { ok: true });
   }
 
-  /* ---- commit ---- */
+  /* ---- commit (v2.1: --amend + commit-all) ---- */
   if (route === '/api/git/commit' && req.method === 'POST') {
     const summary = String(body.summary || '').trim();
     if (!summary) throw new Error('Commit summary is required');
     const description = String(body.description || '').trim();
     const message = description ? `${summary}\n\n${description}` : summary;
+    const amend = body.amend === true;
+    const commitAll = body.all === true;
 
     // Fail with a readable message instead of git's cryptic identity error.
     try {
@@ -1292,37 +1873,97 @@ async function handle(req, res) {
       );
     }
 
-    const staged = (await runGit(['diff', '--cached', '--name-only'])).trim();
-    if (!staged) throw new Error('Nothing is staged. Stage files before committing.');
+    if (commitAll) {
+      await runGit(['add', '-A']);
+    }
 
-    const result = await runGit(['commit', '-m', message]);
-    return send(req, res, 200, { ok: true, result: result.trim() });
+    if (!amend) {
+      const staged = (await runGit(['diff', '--cached', '--name-only'])).trim();
+      // A merge commit after resolving conflicts may legitimately have
+      // nothing staged (e.g. "ours" == HEAD for every file) — git still
+      // records the merge, so let it through when MERGE_HEAD exists.
+      const merging = await isMerging();
+      if (!staged && !merging) throw new Error('Nothing is staged. Stage files before committing.');
+    } else if (!(await hasHead())) {
+      throw new Error('Cannot amend: there is no commit yet.');
+    }
+
+    const args = ['commit', '-m', message];
+    if (amend) args.push('--amend');
+    const result = await runGit(args);
+    return send(req, res, 200, { ok: true, result: result.trim(), amended: amend });
   }
 
-  /* ---- remote sync ---- */
+  /* ---- remote sync (v2.1: pull/push/sync expanded) ---- */
   if (route === '/api/git/fetch' && req.method === 'POST') {
     return send(req, res, 200, { ok: true, result: (await runGit(['fetch', '--all', '--prune'])).trim() });
   }
 
   if (route === '/api/git/pull' && req.method === 'POST') {
-    const branch = await currentBranch();
-    if (!branch || branch.startsWith('(')) throw new Error('Cannot pull: no branch checked out');
-    const upstream = await upstreamOf(branch);
-    const args = upstream ? ['pull', '--ff-only'] : ['pull', '--ff-only', 'origin', branch];
-    return send(req, res, 200, { ok: true, result: (await runGit(args)).trim() });
+    // { mode: 'merge' (default) | 'rebase' | 'ff-only', remote, branch }
+    // A merge conflict returns HTTP 200 with { ok: false, conflict: true,
+    // conflicts } so the UI can offer ours/theirs instead of a bare error.
+    const pulled = await pullRepo({
+      mode: body.mode || 'merge',
+      remote: body.remote || 'origin',
+      branch: body.branch || null,
+    });
+    return send(req, res, 200, { ok: pulled.ok, ...pulled, ...(await aheadBehind()) });
   }
 
   if (route === '/api/git/push' && req.method === 'POST') {
-    const branch = await currentBranch();
-    if (!branch || branch.startsWith('(')) throw new Error('Cannot push: no branch checked out');
-    const upstream = await upstreamOf(branch);
-    // First push of a new branch needs -u, otherwise `git push` fails with
-    // "fatal: The current branch has no upstream branch".
-    const args = upstream ? ['push'] : ['push', '-u', 'origin', branch];
-    return send(req, res, 200, { ok: true, result: (await runGit(args)).trim() });
+    // { remote, branch, setUpstream, force (needs confirm=true), pushAll, tags }
+    const pushed = await pushRepo({
+      remote: body.remote || 'origin',
+      branch: body.branch || null,
+      setUpstream: !!body.setUpstream,
+      force: !!body.force,
+      confirm: body.confirm === true,
+      pushAll: !!body.pushAll,
+      tags: !!body.tags,
+    });
+    return send(req, res, 200, { ok: true, ...pushed, ...(await aheadBehind()) });
   }
 
-  /* ---- branches ---- */
+  // One-click sync: fetch -> pull -> push, with a per-step report.
+  if (route === '/api/git/sync' && req.method === 'POST') {
+    const mode = ['merge', 'rebase', 'ff-only'].includes(body.mode) ? body.mode : 'merge';
+    const steps = [];
+    let pulled = null;
+    let pushed = null;
+    try {
+      const fetchOut = await runGit(['fetch', '--all', '--prune']);
+      steps.push({ step: 'fetch', ok: true, result: (fetchOut || '').trim() });
+    } catch (err) {
+      steps.push({ step: 'fetch', ok: false, error: err.message });
+      return send(req, res, 200, { ok: false, steps, error: err.message, ...(await aheadBehind()) });
+    }
+    try {
+      pulled = await pullRepo({ mode, remote: body.remote || 'origin', branch: body.branch || null });
+    } catch (err) {
+      steps.push({ step: 'pull', ok: false, error: err.message });
+      return send(req, res, 200, { ok: false, steps, error: err.message, ...(await aheadBehind()) });
+    }
+    steps.push({ step: 'pull', ok: pulled.ok, conflict: !!pulled.conflict, conflicts: pulled.conflicts || [], result: pulled.result || '', commitsPulled: pulled.commitsPulled || 0, changedFiles: pulled.changedFiles || [] });
+    if (!pulled.ok) {
+      return send(req, res, 200, { ok: false, conflict: !!pulled.conflict, conflicts: pulled.conflicts || [], steps, pulled, ...(await aheadBehind()) });
+    }
+    try {
+      pushed = await pushRepo({ remote: body.remote || 'origin', branch: body.branch || null });
+      steps.push({ step: 'push', ok: true, result: pushed.result || '' });
+    } catch (err) {
+      steps.push({ step: 'push', ok: false, error: err.message });
+      return send(req, res, 200, { ok: false, steps, pulled, error: err.message, ...(await aheadBehind()) });
+    }
+    return send(req, res, 200, { ok: true, steps, pulled, pushed, ...(await aheadBehind()) });
+  }
+
+  // How many commits ahead of / behind the upstream branch.
+  if (route === '/api/git/ahead-behind' && req.method === 'GET') {
+    return send(req, res, 200, { ok: true, ...(await aheadBehind()) });
+  }
+
+  /* ---- branches (v2.1: local + remote, create/rename/delete) ---- */
   if (route === '/api/git/branches' && req.method === 'GET') {
     // `%(HEAD)` is "*" or " " and branch names cannot contain spaces, so the
     // first character plus the rest of the line is an unambiguous split.
@@ -1335,7 +1976,133 @@ async function handle(req, res) {
         name: line.slice(2).trim(),
       }))
       .filter((b) => b.name);
-    return send(req, res, 200, { branches });
+    const remoteRaw = await runGit(['branch', '-r', '--format=%(refname:short)']).catch(() => '');
+    const remoteBranches = remoteRaw.split('\n').map((s) => s.trim()).filter((s) => s && !s.includes(' -> '));
+    return send(req, res, 200, { branches, remoteBranches, current: await currentBranch() });
+  }
+
+  if (route === '/api/git/branch/create' && req.method === 'POST') {
+    const name = validateBranchName(body.name);
+    const from = body.from ? validateBranchName(body.from) : null;
+    const checkout = body.checkout === true;
+    if (checkout) {
+      const args = ['checkout', '-b', name];
+      if (from) args.push(from);
+      await runGit(args);
+    } else {
+      const args = ['branch', name];
+      if (from) args.push(from);
+      await runGit(args);
+    }
+    return send(req, res, 200, { ok: true, branch: name, current: await currentBranch(), repository: await repoSummary() });
+  }
+
+  if (route === '/api/git/branch/rename' && req.method === 'POST') {
+    const oldName = validateBranchName(body.old || body.from);
+    const newName = validateBranchName(body.new || body.to);
+    const current = await currentBranch();
+    if (oldName === current) {
+      await runGit(['branch', '-m', newName]);
+    } else {
+      await runGit(['branch', '-m', oldName, newName]);
+    }
+    return send(req, res, 200, { ok: true, old: oldName, new: newName, current: await currentBranch() });
+  }
+
+  if (route === '/api/git/branch/delete' && req.method === 'POST') {
+    const name = validateBranchName(body.name);
+    const remote = body.remote === true;
+    const force = body.force === true;
+    const current = await currentBranch();
+    if (!remote && name === current) {
+      throw new Error(`Cannot delete the current branch (${name}). Switch to another branch first.`);
+    }
+    let localDeleted = false;
+    let remoteDeleted = false;
+    if (!remote) {
+      await runGit(['branch', force ? '-D' : '-d', name]);
+      localDeleted = true;
+    }
+    if (remote || body.deleteRemote === true) {
+      const remoteName = validateRemoteName(body.remoteName || 'origin');
+      await runGit(['push', remoteName, '--delete', name]);
+      remoteDeleted = true;
+    }
+    return send(req, res, 200, { ok: true, branch: name, localDeleted, remoteDeleted, current: await currentBranch() });
+  }
+
+  /* ---- merge + conflicts (v2.1) ---- */
+  if (route === '/api/git/merge' && req.method === 'POST') {
+    const branch = validateBranchName(body.branch);
+    const args = ['merge'];
+    if (body.noFF === true) args.push('--no-ff');
+    args.push(branch);
+    let result;
+    try {
+      result = await runGit(args);
+    } catch (err) {
+      const text = `${err.message || ''} ${err.gitStderr || ''}`;
+      if (/CONFLICT/i.test(text) || /Automatic merge failed/i.test(text)) {
+        const conflicts = await conflictedFiles();
+        return send(req, res, 200, { ok: false, conflict: true, conflicts, branch, result: text.trim() });
+      }
+      throw err;
+    }
+    return send(req, res, 200, { ok: true, conflict: false, branch, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/conflicts' && req.method === 'GET') {
+    return send(req, res, 200, { ok: true, merging: await isMerging(), conflicts: await conflictedFiles() });
+  }
+
+  if (route === '/api/git/conflict/resolve' && req.method === 'POST') {
+    const rel = safeRel(body.path);
+    const side = body.side === 'theirs' ? 'theirs' : 'ours';
+    if (!(await isMerging()) && (await conflictedFiles()).length === 0) {
+      throw new Error('No merge conflict in progress');
+    }
+    await runGit(['checkout', `--${side}`, '--', rel]);
+    await runGit(['add', '--', rel]);
+    const remaining = await conflictedFiles();
+    return send(req, res, 200, { ok: true, path: rel, side, remainingConflicts: remaining, allResolved: remaining.length === 0 });
+  }
+
+  if (route === '/api/git/merge/abort' && req.method === 'POST') {
+    if (!(await isMerging())) throw new Error('No merge in progress to abort');
+    await runGit(['merge', '--abort']);
+    return send(req, res, 200, { ok: true, conflicts: [] });
+  }
+
+  /* ---- stash (v2.1) ---- */
+  if (route === '/api/git/stash/create' && req.method === 'POST') {
+    const message = String(body.message || '').trim();
+    const args = ['stash', 'push'];
+    if (message) args.push('-m', message);
+    const result = await runGit(args);
+    const out = (result || '').trim();
+    if (/No local changes to save/i.test(out)) {
+      throw new Error('Nothing to stash — the working tree is clean.');
+    }
+    return send(req, res, 200, { ok: true, result: out, stashes: parseStashList(await runGit(['stash', 'list'])) });
+  }
+
+  if (route === '/api/git/stash/list' && req.method === 'GET') {
+    return send(req, res, 200, { ok: true, stashes: parseStashList(await runGit(['stash', 'list'])) });
+  }
+
+  if (route === '/api/git/stash/apply' && req.method === 'POST') {
+    const index = Number(body.index) || 0;
+    if (!Number.isInteger(index) || index < 0) throw new Error('Invalid stash index');
+    const pop = body.pop === true;
+    const result = await runGit(['stash', pop ? 'pop' : 'apply', `stash@{${index}}`]);
+    return send(req, res, 200, { ok: true, result: (result || '').trim(), stashes: parseStashList(await runGit(['stash', 'list'])) });
+  }
+
+  if (route === '/api/git/stash/drop' && req.method === 'POST') {
+    const index = Number(body.index) || 0;
+    if (!Number.isInteger(index) || index < 0) throw new Error('Invalid stash index');
+    const result = await runGit(['stash', 'drop', `stash@{${index}}`]);
+    return send(req, res, 200, { ok: true, result: (result || '').trim(), stashes: parseStashList(await runGit(['stash', 'list'])) });
   }
 
   if (route === '/api/git/checkout' && req.method === 'POST') {
@@ -1360,10 +2127,13 @@ async function handle(req, res) {
     return send(req, res, 200, { ok: true, repository: await repoSummary() });
   }
 
-  /* ---- history ---- */
+  /* ---- history (v2.1: paginated) ---- */
   if (route === '/api/git/log' && req.method === 'GET') {
-    if (!(await hasHead())) return send(req, res, 200, { commits: [] });
-    const raw = await runGit(['log', '-30', '--date=short', '--pretty=format:%h%x1f%s%x1f%an%x1f%ad']);
+    if (!(await hasHead())) return send(req, res, 200, { commits: [], page: 1, per_page: 30 });
+    const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+    const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+    const skip = (page - 1) * perPage;
+    const raw = await runGit(['log', `--max-count=${perPage}`, `--skip=${skip}`, '--date=short', '--pretty=format:%h%x1f%s%x1f%an%x1f%ad']);
     const commits = raw
       .split('\n')
       .filter(Boolean)
@@ -1371,7 +2141,62 @@ async function handle(req, res) {
         const [hash, subject, author, date] = line.split('\x1f');
         return { hash, subject, author, date };
       });
-    return send(req, res, 200, { commits });
+    return send(req, res, 200, { commits, page, per_page: perPage, has_next: commits.length === perPage });
+  }
+
+  /* ---- diff summary (v2.1): per-file insertions/deletions ---- */
+  if (route === '/api/git/diff/summary' && req.method === 'GET') {
+    const worktree = parseNumstat(await runGit(['diff', '--numstat']).catch(() => ''));
+    const staged = parseNumstat(await runGit(['diff', '--cached', '--numstat']).catch(() => ''));
+    return send(req, res, 200, { ok: true, worktree, staged });
+  }
+
+  /* ---- remotes (v2.1) ---- */
+  if (route === '/api/git/remotes' && req.method === 'GET') {
+    // Raw config values, not `git remote -v`: -v applies url.insteadOf
+    // rewriting, so a GitHub remote redirected to a local mirror would
+    // show up as a local path. The UI wants the configured URL.
+    const urlRaw = await runGit(['config', '--get-regexp', '^remote\\..*\\.url$']).catch(() => '');
+    const pushRaw = await runGit(['config', '--get-regexp', '^remote\\..*\\.pushurl$']).catch(() => '');
+    const byName = new Map();
+    for (const line of urlRaw.split('\n')) {
+      const m = line.match(/^remote\.(.+)\.url\s+(.*)$/);
+      if (!m) continue;
+      const entry = byName.get(m[1]) || { name: m[1], fetchUrl: null, pushUrl: null };
+      entry.fetchUrl = m[2].trim();
+      byName.set(m[1], entry);
+    }
+    for (const line of pushRaw.split('\n')) {
+      const m = line.match(/^remote\.(.+)\.pushurl\s+(.*)$/);
+      if (!m) continue;
+      const entry = byName.get(m[1]) || { name: m[1], fetchUrl: null, pushUrl: null };
+      entry.pushUrl = m[2].trim();
+      byName.set(m[1], entry);
+    }
+    for (const entry of byName.values()) {
+      if (!entry.pushUrl) entry.pushUrl = entry.fetchUrl;
+    }
+    return send(req, res, 200, { ok: true, remotes: [...byName.values()] });
+  }
+
+  if (route === '/api/git/remote/add' && req.method === 'POST') {
+    const name = validateRemoteName(body.name);
+    const remoteUrl = validateGitUrl(body.url);
+    const result = await runGit(['remote', 'add', name, remoteUrl]);
+    return send(req, res, 200, { ok: true, name, url: remoteUrl, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/remote/remove' && req.method === 'POST') {
+    const name = validateRemoteName(body.name);
+    const result = await runGit(['remote', 'remove', name]);
+    return send(req, res, 200, { ok: true, name, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/remote/set-url' && req.method === 'POST') {
+    const name = validateRemoteName(body.name);
+    const remoteUrl = validateGitUrl(body.url);
+    const result = await runGit(['remote', 'set-url', name, remoteUrl]);
+    return send(req, res, 200, { ok: true, name, url: remoteUrl, result: (result || '').trim() });
   }
 
   /* ---- diff ---- */
@@ -1425,8 +2250,10 @@ async function handle(req, res) {
 
 loadState();
 loadGhConfig();
+loadOAuthAppConfig();
 autoUpdate.enabled = !!(ghConfig.autoUpdate && ghConfig.autoUpdate.enabled);
 autoUpdate.intervalSeconds = clampInterval(ghConfig.autoUpdate && ghConfig.autoUpdate.intervalSeconds);
+autoUpdate.autoSync = !!(ghConfig.autoUpdate && ghConfig.autoUpdate.autoSync);
 scheduleAutoUpdate();
 
 const server = http.createServer((req, res) => {
@@ -1457,12 +2284,14 @@ server.listen(PORT, HOST, () => {
   console.log(`TOKEN:      ${TOKEN}`);
   console.log(`GitHub API: ${GITHUB_API_BASE}`);
   if (ghAuthed()) {
-    console.log(`GitHub:     signed in as ${ghConfig.user.login} (since ${ghConfig.authedAt})`);
+    console.log(`GitHub:     signed in as ${ghConfig.user.login} (${ghConfig.authMethod || 'token'}, since ${ghConfig.authedAt})`);
   } else {
-    console.log('GitHub:     not signed in — sign in from the extension (PAT or Device Flow).');
+    console.log('GitHub:     not signed in — sign in from the extension (Connect GitHub, PAT or Device Flow).');
   }
-  if (!GITHUB_CLIENT_ID) console.log('Device Flow: disabled (set GITHUB_CLIENT_ID to enable it).');
-  console.log(`Auto-update: ${autoUpdate.enabled ? `ON every ${autoUpdate.intervalSeconds}s` : 'OFF'}`);
+  if (!oauthClientId()) console.log('OAuth App:  not configured — Device Flow and Connect GitHub need a client id (see README section 6).');
+  else if (!oauthClientSecret()) console.log('OAuth App:  client id set, client secret missing — Connect GitHub (Web Flow) needs the secret too.');
+  else console.log('OAuth App:  configured — Connect GitHub (Web Flow) and Device Flow are available.');
+  console.log(`Auto-update: ${autoUpdate.enabled ? `ON every ${autoUpdate.intervalSeconds}s${autoUpdate.autoSync ? ' + auto-sync' : ''}` : 'OFF'}`);
   if (repoPath) console.log(`Repository: ${repoPath}`);
   console.log('');
   console.log('Paste the TOKEN into the extension dashboard, then click "Connect Bridge".');

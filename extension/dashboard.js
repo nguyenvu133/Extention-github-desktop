@@ -1,14 +1,18 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v2.0.0
+ * PixiJS GitHub Desktop Sync — dashboard v2.1.0
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
  *     repo detail (README, file tree + viewer, commits, branches,
  *     issues, pull requests), auto-update with new-commit detection.
  *   - Local Git tab: the v1 local-git client (status, stage, commit,
- *     branches, history, diff, fetch/pull/push).
+ *     branches, history, diff, fetch/pull/push) plus v2.1 push/pull/sync
+ *     with ahead/behind, branch management, merge-conflict resolution,
+ *     stash, remotes and clone.
+ *   - Sign-in: OAuth Web Flow (Connect GitHub) first, then PAT and
+ *     Device Flow as before.
  *
  * CONNECTION MODEL (this is what v1 got wrong — "Bridge disconnected"
  * used to stick forever):
@@ -33,7 +37,7 @@ let sseBackoffMs = 1000;
 let sseBackoffTimer = null;
 let healthFailures = 0;
 
-let ghUser = null; // public profile from /api/github/me, or null
+let ghUser = null; // public profile from /api/github/user, or null
 let allRepos = []; // full repo list from /api/github/repos/all
 let reposLoadedAt = null;
 let currentRepo = null; // { owner, repo, full_name, default_branch }
@@ -41,6 +45,10 @@ let currentPath = ''; // path inside the file tree
 let selectedFile = '';
 let localConnected = false;
 let updateBadgeCount = 0;
+let historyPage = 1; // v2.1 paginated local history
+let historyHasNext = false;
+let oauthConfigured = false; // v2.1 OAuth Web Flow ready?
+let oauthPollTimer = null;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -229,7 +237,23 @@ function startEventStream() {
       if (payload.authed === false) {
         ghUser = null;
         showUser(null);
+      } else if (payload.authed === true) {
+        // OAuth Web Flow (or another sign-in) completed on the bridge.
+        stopOAuthPolling();
+        refreshGithubState().catch((err) => log('ERROR: ' + err.message));
       }
+    });
+    source.addEventListener('auto-sync', (ev) => {
+      let payload = {};
+      try { payload = JSON.parse(ev.data); } catch (_) {}
+      if (payload.skipped) {
+        log(`Auto-sync skipped for ${payload.repo || '?'}: ${payload.reason || 'no reason given'}`);
+      } else {
+        log(`Auto-sync pulled ${payload.commitsPulled || 0} commit(s) into ${payload.repo || '?'}@${payload.branch || ''}` +
+          (payload.changedFiles && payload.changedFiles.length ? ` — ${payload.changedFiles.join(', ')}` : ''));
+        if (localConnected) refreshAllLocal().catch(() => {});
+      }
+      if (payload.at) showAutoUpdate({ lastAutoSync: payload });
     });
     source.addEventListener('rate-limit', (ev) => {
       let payload = {};
@@ -275,6 +299,13 @@ async function reconnectNow() {
 /* GitHub sign-in                                                      */
 /* ------------------------------------------------------------------ */
 
+function authMethodLabel(method) {
+  if (method === 'oauth-web') return 'OAuth Web';
+  if (method === 'pat') return 'PAT';
+  if (method === 'device') return 'Device Flow';
+  return method ? String(method) : '';
+}
+
 function showUser(user) {
   ghUser = user || null;
   if (user && user.login) {
@@ -282,11 +313,15 @@ function showUser(user) {
     $('userAvatar').src = user.avatar_url || '';
     $('userAvatar').alt = user.login;
     $('userLogin').textContent = user.login;
+    const method = authMethodLabel(user.authMethod);
+    $('userAuthMethod').textContent =
+      (method ? 'via ' + method : '') + (user.scopes ? ' · ' + user.scopes : '');
     $('loginPanel').classList.add('hidden');
   } else {
     $('userChip').classList.add('hidden');
     $('userAvatar').src = '';
     $('userLogin').textContent = '—';
+    $('userAuthMethod').textContent = '';
     $('loginPanel').classList.remove('hidden');
   }
 }
@@ -301,8 +336,19 @@ function updateRateLimit(rl) {
 
 async function refreshGithubState() {
   try {
-    const me = await gh('/me');
+    // v2.1: /user reports the sign-in method + scopes; fall back to the
+    // v2.0 /me endpoint when talking to an older bridge.
+    let me;
+    try {
+      me = await gh('/user');
+    } catch (_) {
+      me = await gh('/me');
+    }
     if (me.authed && me.user) {
+      // /me does not return authMethod/scopes on the user object, but the
+      // v2.1 /user response carries them at the top level too.
+      if (!me.user.authMethod && me.authMethod) me.user.authMethod = me.authMethod;
+      if (!me.user.scopes && me.scopes) me.user.scopes = me.scopes;
       showUser(me.user);
       updateRateLimit(me.rateLimit);
       await loadRepos(false);
@@ -319,6 +365,7 @@ async function refreshGithubState() {
       throw err;
     }
   }
+  await loadOAuthStatus();
 }
 
 let devicePollTimer = null;
@@ -387,6 +434,80 @@ async function logoutGithub() {
 }
 
 /* ------------------------------------------------------------------ */
+/* OAuth Web Flow (v2.1): Connect GitHub — the recommended sign-in     */
+/* ------------------------------------------------------------------ */
+
+// Reads /oauth/status and updates the setup form. Never throws: an
+// older bridge (or a bridge that is down) simply leaves the form as-is.
+async function loadOAuthStatus() {
+  try {
+    const st = await gh('/oauth/status');
+    oauthConfigured = !!st.configured;
+    $('oauthCallbackUrl').textContent = st.callbackUrl || '—';
+    $('oauthConfigStatus').textContent = st.configured
+      ? `OAuth App: configured ✓ (Client ID ${st.clientIdConfigured ? 'set' : 'missing'} · Client Secret ${st.clientSecretConfigured ? 'set' : 'missing'} — the secret is never shown again)`
+      : 'OAuth App: not configured yet. Create an OAuth App (see above), save its Client ID + Client Secret, then click CONNECT GITHUB.';
+    $('oauthConnectHint').textContent = st.configured
+      ? 'Sign in with your real GitHub account in the browser (OAuth Web Flow — the recommended way).'
+      : 'Connect GitHub needs an OAuth App first — open "OAUTH APP SETUP" below, or sign in with a token / Device Flow instead.';
+  } catch (_) { /* older bridge or offline — PAT / Device Flow still work */ }
+}
+
+async function saveOAuthConfig() {
+  const clientId = $('oauthClientId').value.trim();
+  const clientSecret = $('oauthClientSecret').value.trim();
+  if (!clientId) throw new Error('Paste the Client ID from your GitHub OAuth App first');
+  if (!clientSecret) throw new Error('Paste the Client Secret from your GitHub OAuth App first');
+  const res = await gh('/oauth/config', 'POST', { clientId, clientSecret });
+  $('oauthClientSecret').value = '';
+  oauthConfigured = !!res.configured;
+  $('oauthCallbackUrl').textContent = res.callbackUrl || $('oauthCallbackUrl').textContent;
+  await loadOAuthStatus();
+  log('OAuth App saved. You can now click CONNECT GITHUB.');
+}
+
+function stopOAuthPolling() {
+  if (oauthPollTimer) { clearInterval(oauthPollTimer); oauthPollTimer = null; }
+}
+
+async function startOAuthWeb() {
+  if (!oauthConfigured) {
+    // Refresh the status first — the user may just have saved the config
+    // in another tab, or the bridge may have one from its environment.
+    await loadOAuthStatus();
+  }
+  if (!oauthConfigured) {
+    throw new Error('OAuth Web Flow is not configured yet. Open "OAUTH APP SETUP" above: create a GitHub OAuth App (github.com → Settings → Developer settings → OAuth Apps), paste its Authorization callback URL from this page, then save its Client ID + Client Secret here. Or sign in with a Personal Access Token / Device Flow instead.');
+  }
+  const res = await gh('/oauth/start');
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) chrome.tabs.create({ url: res.authorizeUrl });
+  else if (typeof window !== 'undefined' && window.open) window.open(res.authorizeUrl, '_blank');
+  log('GitHub sign-in opened in a new tab. Approve the app there — this page will pick up the account automatically.');
+  $('oauthConnectHint').textContent = 'Waiting for you to approve on GitHub… (this page checks every 2s, up to 5 minutes)';
+  stopOAuthPolling();
+  const deadline = Date.now() + 5 * 60 * 1000;
+  oauthPollTimer = setInterval(async () => {
+    if (Date.now() > deadline) {
+      stopOAuthPolling();
+      $('oauthConnectHint').textContent = 'The sign-in timed out. Click CONNECT GITHUB again.';
+      return;
+    }
+    try {
+      const me = await gh('/user');
+      if (me.authed && me.user) {
+        stopOAuthPolling();
+        if (!me.user.authMethod && me.authMethod) me.user.authMethod = me.authMethod;
+        if (!me.user.scopes && me.scopes) me.user.scopes = me.scopes;
+        showUser(me.user);
+        log(`Signed in to GitHub as ${me.user.login} (OAuth Web)`);
+        await loadRepos(true);
+        await loadAutoUpdateStatus();
+      }
+    } catch (_) { /* bridge hiccup — keep polling until the deadline */ }
+  }, 2000);
+}
+
+/* ------------------------------------------------------------------ */
 /* Auto-update                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -395,6 +516,9 @@ function showAutoUpdate(status) {
   const el = $('autoUpdateState');
   if (!status.enabled) {
     el.textContent = 'Auto-update is off.';
+    $('autoSyncState').textContent = '';
+    $('autoSyncToggle').checked = false;
+    $('autoSyncToggle').disabled = true;
     return;
   }
   const last = status.lastRunAt ? new Date(status.lastRunAt).toLocaleTimeString() : 'never';
@@ -402,6 +526,17 @@ function showAutoUpdate(status) {
   el.textContent = `On · every ${status.intervalSeconds}s · last check ${last} · next ${next}` +
     (status.updatesFound ? ` · ${status.updatesFound} update(s) found` : '') +
     (status.lastError ? ` · last error: ${status.lastError}` : '');
+  $('autoSyncToggle').disabled = false;
+  $('autoSyncToggle').checked = !!status.autoSync;
+  const lastSync = status.lastAutoSync;
+  $('autoSyncState').textContent = status.autoSync
+    ? 'Auto-sync ON — new commits are pulled into the local repo automatically.' +
+      (lastSync && lastSync.at
+        ? ' Last auto-sync: ' + new Date(lastSync.at).toLocaleTimeString() +
+          (lastSync.skipped ? ' (skipped: ' + (lastSync.reason || '') + ')' :
+            ' · ' + (lastSync.commitsPulled || 0) + ' commit(s) pulled')
+        : '')
+    : '';
 }
 
 function showUpdateBadge() {
@@ -424,8 +559,10 @@ async function loadAutoUpdateStatus() {
   } catch (_) { /* not authed yet — ignore */ }
 }
 
-async function setAutoUpdateUI(enabled, intervalSeconds) {
-  const status = await gh('/auto-update', 'POST', { enabled, intervalSeconds });
+async function setAutoUpdateUI(enabled, intervalSeconds, autoSync) {
+  const body = { enabled, intervalSeconds };
+  if (autoSync !== undefined) body.autoSync = !!autoSync;
+  const status = await gh('/auto-update', 'POST', body);
   showAutoUpdate(status);
   await chrome.storage.local.set({ autoUpdateEnabled: status.enabled, autoUpdateInterval: status.intervalSeconds });
   return status;
@@ -867,6 +1004,27 @@ async function status() {
   }
 
   log(files.length + ' changed file(s)');
+  loadDiffSummary().catch(() => {});
+}
+
+function formatDiffEntries(entries) {
+  const list = entries || [];
+  if (!list.length) return '0 files';
+  let ins = 0;
+  let del = 0;
+  for (const e of list) { ins += Number(e.insertions) || 0; del += Number(e.deletions) || 0; }
+  return `${list.length} file(s) (+${ins}/−${del})`;
+}
+
+async function loadDiffSummary() {
+  const data = await api('/api/git/diff/summary');
+  const worktree = data.worktree || [];
+  const staged = data.staged || [];
+  const fmt = (entries) => (entries || []).map((e) =>
+    `${e.path} (+${e.insertions || 0}/−${e.deletions || 0}${e.binary ? ' binary' : ''})`).join(' · ');
+  $('diffSummary').textContent =
+    `Unstaged (worktree): ${formatDiffEntries(worktree)}` + (worktree.length ? ' — ' + fmt(worktree) : '') +
+    ` · Staged: ${formatDiffEntries(staged)}` + (staged.length ? ' — ' + fmt(staged) : '');
 }
 
 async function showDiff(path) {
@@ -893,45 +1051,421 @@ async function branches() {
     option.value = '';
     option.textContent = 'No branches';
     select.append(option);
-    return;
+  } else {
+    for (const branch of list) {
+      const option = document.createElement('option');
+      option.value = branch.name;
+      option.textContent = (branch.current ? '● ' : '') + branch.name;
+      select.append(option);
+    }
+    if (previous && list.some((b) => b.name === previous)) select.value = previous;
   }
 
-  for (const branch of list) {
-    const option = document.createElement('option');
-    option.value = branch.name;
-    option.textContent = (branch.current ? '● ' : '') + branch.name;
-    select.append(option);
+  // v2.1: remote branches (read-only list — delete via the Branch panel).
+  const remoteList = $('remoteBranchList');
+  const remoteBranches = data.remoteBranches || [];
+  remoteList.innerHTML = '';
+  if (!remoteBranches.length) {
+    remoteList.className = 'empty';
+    remoteList.textContent = 'No remote branches.';
+  } else {
+    remoteList.className = '';
+    for (const name of remoteBranches) {
+      const row = document.createElement('div');
+      row.className = 'commititem';
+      const title = document.createElement('b');
+      title.textContent = name;
+      row.append(title);
+      remoteList.append(row);
+    }
   }
-
-  if (previous && list.some((b) => b.name === previous)) select.value = previous;
 }
 
-async function history() {
-  const data = await api('/api/git/log');
+async function history(page) {
+  historyPage = Math.max(1, Number(page) || historyPage || 1);
+  const data = await api('/api/git/log?page=' + historyPage + '&per_page=30');
+  historyHasNext = !!data.has_next;
   const container = $('history');
   container.innerHTML = '';
 
   const commits = data.commits || [];
   if (!commits.length) {
     container.className = 'empty';
-    container.textContent = 'No commits yet';
+    container.textContent = historyPage > 1 ? 'No more commits on this page.' : 'No commits yet';
+  } else {
+    container.className = '';
+    for (const commit of commits) {
+      const item = document.createElement('div');
+      item.className = 'commititem';
+
+      const title = document.createElement('b');
+      title.textContent = commit.hash + ' · ' + commit.subject;
+
+      const meta = document.createElement('small');
+      meta.textContent = commit.author + ' · ' + commit.date;
+
+      item.append(title, meta);
+      container.append(item);
+    }
+  }
+  $('historyPageLabel').textContent = 'Page ' + historyPage;
+  $('historyPrevBtn').disabled = historyPage <= 1;
+  $('historyNextBtn').disabled = !historyHasNext;
+}
+
+/* ------------------------------------------------------------------ */
+/* Local Git v2.1: ahead/behind, push/pull/sync, branches, merge,      */
+/* stash, remotes, clone                                               */
+/* ------------------------------------------------------------------ */
+
+function syncTarget() {
+  return {
+    remote: $('syncRemote').value.trim() || 'origin',
+    branch: $('syncBranch').value.trim() || null,
+    mode: $('pullMode').value || 'merge',
+  };
+}
+
+async function loadAheadBehind() {
+  const data = await api('/api/git/ahead-behind');
+  const badge = $('aheadBehindBadge');
+  if (!data.hasUpstream) {
+    badge.textContent = 'No upstream';
+    badge.title = 'This branch has no upstream branch yet — tick "Set upstream" on push.';
+    return data;
+  }
+  const ahead = Number(data.ahead) || 0;
+  const behind = Number(data.behind) || 0;
+  badge.textContent = `↑${ahead} ↓${behind}`;
+  badge.title = `ahead ${ahead}, behind ${behind} ${data.upstream || ''}`.trim();
+  return data;
+}
+
+function showAheadBehind(data) {
+  if (!data) return;
+  const badge = $('aheadBehindBadge');
+  const ahead = Number(data.ahead) || 0;
+  const behind = Number(data.behind) || 0;
+  if (data.hasUpstream === false) {
+    badge.textContent = 'No upstream';
+    badge.title = 'This branch has no upstream branch yet — tick "Set upstream" on push.';
+  } else {
+    badge.textContent = `↑${ahead} ↓${behind}`;
+    badge.title = `ahead ${ahead}, behind ${behind} ${data.upstream || ''}`.trim();
+  }
+}
+
+// A pull/merge that conflicts returns HTTP 200 { ok:false, conflict:true }.
+// Surface it in the Merge & Conflicts panel instead of a bare error.
+async function handlePossibleConflict(res, what) {
+  if (res && res.conflict) {
+    log(`${what}: merge conflict in ${(res.conflicts || []).length} file(s) — resolve below (Ours / Theirs), then Commit merge.`);
+    await loadConflicts();
+    return true;
+  }
+  return false;
+}
+
+async function doFetch() {
+  await api('/api/git/fetch', 'POST', {});
+  await loadAheadBehind().catch(() => {});
+  await status();
+}
+
+async function doPull() {
+  const t = syncTarget();
+  const res = await api('/api/git/pull', 'POST', { mode: t.mode, remote: t.remote, branch: t.branch });
+  showAheadBehind(res);
+  await loadAheadBehind().catch(() => {});
+  if (await handlePossibleConflict(res, 'Pull')) {
+    await status();
+    await history();
+    return res;
+  }
+  if (!res.ok) throw new Error(res.error || res.result || 'Pull failed');
+  log(`Pull (${res.mode || t.mode}) ✓ — ${res.commitsPulled || 0} commit(s), ${((res.changedFiles || []).length)} file(s) changed${res.fastForward ? ' (fast-forward)' : ''}`);
+  await status();
+  await history();
+  return res;
+}
+
+async function doPush(options) {
+  const t = syncTarget();
+  const force = !!$('forcePushCheck').checked;
+  if (force && !$('forceConfirmCheck').checked) {
+    throw new Error('Force-push needs the confirmation checkbox ticked first ("I understand force-push can overwrite the remote branch").');
+  }
+  const body = {
+    remote: t.remote,
+    branch: t.branch,
+    setUpstream: !!$('setUpstreamCheck').checked,
+    force,
+    confirm: force, // only ever sent when the user ticked both checkboxes
+    pushAll: !!(options && options.pushAll),
+    tags: !!(options && options.tags),
+  };
+  const res = await api('/api/git/push', 'POST', body);
+  showAheadBehind(res);
+  await loadAheadBehind().catch(() => {});
+  await status();
+  await history();
+  return res;
+}
+
+function renderSyncSteps(res) {
+  const box = $('syncSteps');
+  const steps = (res && res.steps) || [];
+  if (!steps.length) {
+    box.textContent = res && res.error ? 'Sync failed: ' + res.error : 'Sync finished.';
     return;
   }
+  box.textContent = steps.map((s) =>
+    `${s.step}: ${s.ok ? '✓' : '✗'}${s.conflict ? ' (conflict)' : ''}${s.result ? ' — ' + String(s.result).split('\n')[0] : ''}${s.error ? ' — ' + s.error : ''}`
+  ).join('  ·  ');
+}
 
-  container.className = '';
-  for (const commit of commits) {
-    const item = document.createElement('div');
-    item.className = 'commititem';
-
-    const title = document.createElement('b');
-    title.textContent = commit.hash + ' · ' + commit.subject;
-
-    const meta = document.createElement('small');
-    meta.textContent = commit.author + ' · ' + commit.date;
-
-    item.append(title, meta);
-    container.append(item);
+async function doSync() {
+  const t = syncTarget();
+  let res;
+  try {
+    res = await api('/api/git/sync', 'POST', { mode: t.mode, remote: t.remote, branch: t.branch });
+  } catch (err) {
+    // The bridge answers 400 when a step throws outright (e.g. no remote
+    // configured) instead of a per-step report — show it in the panel too.
+    $('syncSteps').textContent = `sync: ✗ — ${err.message}`;
+    throw err;
   }
+  renderSyncSteps(res);
+  showAheadBehind(res);
+  await loadAheadBehind().catch(() => {});
+  if (await handlePossibleConflict(res, 'Sync')) {
+    await status();
+    await history();
+    return res;
+  }
+  if (!res.ok) throw new Error(res.error || 'Sync failed at the ' + ((res.steps || []).find((s) => !s.ok) || {}).step + ' step');
+  log(`Sync ✓ — pulled ${((res.pulled || {}).commitsPulled) || 0} commit(s), pushed.`);
+  await status();
+  await history();
+  return res;
+}
+
+async function createBranch() {
+  const name = $('newBranchName').value.trim();
+  if (!name) throw new Error('Enter a name for the new branch');
+  const res = await api('/api/git/branch/create', 'POST', {
+    name,
+    from: $('newBranchFrom').value.trim() || undefined,
+    checkout: $('newBranchCheckout').checked,
+  });
+  $('newBranchName').value = '';
+  $('newBranchFrom').value = '';
+  log(`Branch ${res.branch} created${res.current === res.branch ? ' and checked out' : ''}.`);
+  await refreshAllLocal();
+}
+
+async function renameBranch() {
+  const oldName = $('renameBranchOld').value.trim();
+  const newName = $('renameBranchNew').value.trim();
+  if (!oldName || !newName) throw new Error('Enter both the old and the new branch name');
+  const res = await api('/api/git/branch/rename', 'POST', { old: oldName, new: newName });
+  $('renameBranchOld').value = '';
+  $('renameBranchNew').value = '';
+  log(`Branch renamed: ${res.old} → ${res.new}.`);
+  await refreshAllLocal();
+}
+
+async function deleteBranch() {
+  const name = $('deleteBranchName').value.trim();
+  if (!name) throw new Error('Enter the branch to delete');
+  const res = await api('/api/git/branch/delete', 'POST', {
+    name,
+    remote: !!$('deleteBranchRemoteCheck').checked,
+    deleteRemote: !!$('deleteBranchRemoteCheck').checked,
+    remoteName: $('syncRemote').value.trim() || 'origin',
+    force: !!$('deleteBranchForceCheck').checked,
+  });
+  $('deleteBranchName').value = '';
+  log(`Branch ${res.branch} deleted${res.remoteDeleted ? ' locally and on the remote' : ' locally'}.`);
+  await refreshAllLocal();
+}
+
+async function loadConflicts() {
+  const data = await api('/api/git/conflicts');
+  const container = $('conflictList');
+  const conflicts = data.conflicts || [];
+  container.innerHTML = '';
+  if (!conflicts.length) {
+    container.className = 'empty';
+    container.textContent = data.merging ? 'Merging — no conflicted files left. Commit the merge when ready.' : 'No merge conflicts.';
+    return data;
+  }
+  container.className = 'conflict-list';
+  for (const path of conflicts) {
+    const row = document.createElement('div');
+    row.className = 'conflict-row';
+    const name = document.createElement('span');
+    name.className = 'path';
+    name.textContent = path;
+    const oursBtn = document.createElement('button');
+    oursBtn.textContent = 'Ours';
+    oursBtn.title = 'Keep our version of ' + path;
+    oursBtn.onclick = () => run('Resolved ' + path + ' (ours)', async () => {
+      const res = await api('/api/git/conflict/resolve', 'POST', { path, side: 'ours' });
+      await loadConflicts();
+      await status();
+      if (res.allResolved) log('All conflicts resolved — click "Commit merge" to finish.');
+    });
+    const theirsBtn = document.createElement('button');
+    theirsBtn.textContent = 'Theirs';
+    theirsBtn.title = 'Keep their version of ' + path;
+    theirsBtn.onclick = () => run('Resolved ' + path + ' (theirs)', async () => {
+      const res = await api('/api/git/conflict/resolve', 'POST', { path, side: 'theirs' });
+      await loadConflicts();
+      await status();
+      if (res.allResolved) log('All conflicts resolved — click "Commit merge" to finish.');
+    });
+    row.append(name, oursBtn, theirsBtn);
+    container.append(row);
+  }
+  return data;
+}
+
+async function mergeBranch() {
+  const branch = $('mergeBranchInput').value.trim();
+  if (!branch) throw new Error('Enter the branch to merge');
+  const res = await api('/api/git/merge', 'POST', { branch, noFF: $('mergeNoFFCheck').checked });
+  if (await handlePossibleConflict(res, 'Merge')) {
+    await status();
+    await history();
+    return res;
+  }
+  if (!res.ok) throw new Error(res.error || res.result || 'Merge failed');
+  log(`Merged ${branch} ✓`);
+  await status();
+  await history();
+  return res;
+}
+
+async function commitMerge() {
+  const summary = $('summary').value.trim() ||
+    `Merge branch '${$('mergeBranchInput').value.trim() || 'unknown'}'`;
+  await api('/api/git/commit', 'POST', { summary, description: $('description').value.trim() });
+  $('summary').value = '';
+  $('description').value = '';
+  log('Merge committed ✓');
+  await status();
+  await history();
+  await loadConflicts();
+}
+
+async function createStash() {
+  const res = await api('/api/git/stash/create', 'POST', { message: $('stashMessage').value.trim() || undefined });
+  $('stashMessage').value = '';
+  log('Stash created ✓ — ' + (res.result || '').split('\n')[0]);
+  await loadStashList();
+  await status();
+}
+
+async function loadStashList() {
+  const data = await api('/api/git/stash/list');
+  const container = $('stashList');
+  const stashes = data.stashes || [];
+  container.innerHTML = '';
+  if (!stashes.length) {
+    container.className = 'empty';
+    container.textContent = 'No stashes.';
+    return data;
+  }
+  container.className = '';
+  for (const stash of stashes) {
+    const row = document.createElement('div');
+    row.className = 'stash-row';
+    const label = document.createElement('span');
+    label.className = 'path';
+    label.textContent = `stash@{${stash.index}} — ${stash.message || '(no message)'}`;
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Apply';
+    applyBtn.onclick = () => run('Stash applied', async () => {
+      await api('/api/git/stash/apply', 'POST', { index: stash.index });
+      await loadStashList();
+      await status();
+    });
+    const popBtn = document.createElement('button');
+    popBtn.textContent = 'Pop';
+    popBtn.title = 'Apply and remove this stash';
+    popBtn.onclick = () => run('Stash popped', async () => {
+      await api('/api/git/stash/apply', 'POST', { index: stash.index, pop: true });
+      await loadStashList();
+      await status();
+    });
+    const dropBtn = document.createElement('button');
+    dropBtn.textContent = 'Drop';
+    dropBtn.onclick = () => run('Stash dropped', async () => {
+      await api('/api/git/stash/drop', 'POST', { index: stash.index });
+      await loadStashList();
+    });
+    row.append(label, applyBtn, popBtn, dropBtn);
+    container.append(row);
+  }
+  return data;
+}
+
+async function loadRemotes() {
+  const data = await api('/api/git/remotes');
+  const container = $('remoteList');
+  const remotes = data.remotes || [];
+  container.innerHTML = '';
+  if (!remotes.length) {
+    container.className = 'empty';
+    container.textContent = 'No remotes configured.';
+    return data;
+  }
+  container.className = '';
+  for (const remote of remotes) {
+    const row = document.createElement('div');
+    row.className = 'remote-row';
+    const name = document.createElement('b');
+    name.textContent = remote.name;
+    const url = document.createElement('span');
+    url.className = 'path';
+    url.textContent = remote.fetchUrl || remote.pushUrl || '';
+    url.title = 'fetch: ' + (remote.fetchUrl || '') + ' · push: ' + (remote.pushUrl || '');
+    const setUrlBtn = document.createElement('button');
+    setUrlBtn.textContent = 'Edit URL';
+    setUrlBtn.onclick = () => {
+      $('setUrlRemoteName').value = remote.name;
+      $('setUrlRemoteUrl').value = remote.fetchUrl || remote.pushUrl || '';
+      $('setUrlRemoteUrl').focus();
+    };
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = 'Remove';
+    removeBtn.onclick = () => run('Remote removed', async () => {
+      await api('/api/git/remote/remove', 'POST', { name: remote.name });
+      await loadRemotes();
+      await loadAheadBehind().catch(() => {});
+    });
+    row.append(name, url, setUrlBtn, removeBtn);
+    container.append(row);
+  }
+  return data;
+}
+
+async function cloneRepo() {
+  const url = $('cloneUrl').value.trim();
+  const target = $('clonePath').value.trim();
+  if (!url) throw new Error('Enter the repository URL to clone');
+  if (!target) throw new Error('Enter the destination folder for the clone');
+  const res = await api('/api/git/clone', 'POST', {
+    url,
+    path: target,
+    branch: $('cloneBranch').value.trim() || undefined,
+  });
+  $('cloneUrl').value = '';
+  $('cloneBranch').value = '';
+  if (res.repository) $('repoPath').value = res.repository.path;
+  log('Cloned ✓ — ' + (res.result || '').split('\n')[0]);
+  await refreshAllLocal();
 }
 
 async function run(label, fn) {
@@ -949,6 +1483,13 @@ async function refreshAllLocal() {
   await status();
   await branches();
   await history();
+  // v2.1 panels: each is best-effort so one failing endpoint (e.g. no
+  // remote yet) never blocks the rest of the refresh.
+  await loadAheadBehind().catch(() => {});
+  await loadConflicts().catch(() => {});
+  await loadStashList().catch(() => {});
+  await loadRemotes().catch(() => {});
+  await loadDiffSummary().catch(() => {});
 }
 
 /* ------------------------------------------------------------------ */
@@ -956,7 +1497,16 @@ async function refreshAllLocal() {
 /* ------------------------------------------------------------------ */
 
 $('navRepos').onclick = () => { showView(currentRepo ? 'repo' : 'repos'); };
-$('navLocal').onclick = () => { showView('local'); };
+$('navLocal').onclick = () => {
+  showView('local');
+  if (localConnected) {
+    loadAheadBehind().catch(() => {});
+    loadConflicts().catch(() => {});
+    loadStashList().catch(() => {});
+    loadRemotes().catch(() => {});
+    loadDiffSummary().catch(() => {});
+  }
+};
 $('backToRepos').onclick = () => { currentRepo = null; showView('repos'); };
 $('reconnectBtn').onclick = () => run('Reconnect', reconnectNow);
 
@@ -974,6 +1524,14 @@ $('saveConnection').onclick = () => run('Connection saved', async () => {
 });
 
 $('logoutBtn').onclick = () => run('Signed out', logoutGithub);
+
+$('oauthConnectBtn').onclick = () => run('GitHub sign-in (OAuth Web)', startOAuthWeb);
+$('oauthSaveBtn').onclick = () => run('OAuth App saved', saveOAuthConfig);
+$('oauthCopyCallbackBtn').onclick = () => run('Callback URL copied', async () => {
+  const url = $('oauthCallbackUrl').textContent.trim();
+  if (!url || url === '—') throw new Error('Callback URL is not available yet — is the bridge reachable?');
+  await navigator.clipboard.writeText(url);
+});
 
 $('loginPatBtn').onclick = () => run('GitHub sign-in', loginWithPat);
 $('deviceFlowBtn').onclick = () => run('Device Flow started', startDeviceFlow);
@@ -994,6 +1552,11 @@ $('autoUpdateToggle').onchange = () => run('Auto-update setting saved', async ()
   const enabled = $('autoUpdateToggle').checked;
   const intervalSeconds = Number($('autoUpdateInterval').value) || 60;
   await setAutoUpdateUI(enabled, intervalSeconds);
+});
+$('autoSyncToggle').onchange = () => run('Auto-sync setting saved', async () => {
+  if (!$('autoUpdateToggle').checked) throw new Error('Enable Auto-update first — auto-sync only runs as part of it.');
+  const intervalSeconds = Number($('autoUpdateInterval').value) || 60;
+  await setAutoUpdateUI(true, intervalSeconds, $('autoSyncToggle').checked);
 });
 $('autoUpdateInterval').onchange = () => run('Auto-update interval saved', async () => {
   const intervalSeconds = Number($('autoUpdateInterval').value) || 60;
@@ -1062,20 +1625,32 @@ $('unstageAll').onclick = () => run('All changes unstaged', async () => {
 $('commit').onclick = () => run('Commit created', async () => {
   const summary = $('summary').value.trim();
   if (!summary) throw new Error('Commit summary is required');
-  await api('/api/git/commit', 'POST', { summary, description: $('description').value.trim() });
+  await api('/api/git/commit', 'POST', {
+    summary,
+    description: $('description').value.trim(),
+    amend: $('amendCommit').checked,
+    all: $('commitAll').checked,
+  });
   $('summary').value = '';
   $('description').value = '';
+  $('amendCommit').checked = false;
   await status();
   await history();
 });
 
-for (const action of ['fetch', 'pull', 'push']) {
-  $(action).onclick = () => run(action.toUpperCase() + ' completed', async () => {
-    await api('/api/git/' + action, 'POST', {});
-    await status();
-    await history();
-  });
-}
+// v2.1: full Push / Pull / Sync — the old loop only sent {} and Pull was
+// fast-forward only. Pull now honours the selected mode; Push honours
+// set-upstream / force (double opt-in) / push-all / tags.
+$('fetch').onclick = () => run('Fetch completed', doFetch);
+$('pull').onclick = () => run('Pull completed', doPull);
+$('push').onclick = () => run('Push completed', doPush);
+$('syncBtn').onclick = () => run('Sync completed', doSync);
+$('pushAllBtn').onclick = () => run('Push all branches completed', () => doPush({ pushAll: true }));
+$('pushTagsBtn').onclick = () => run('Push tags completed', () => doPush({ tags: true }));
+$('forcePushCheck').onchange = () => {
+  $('forceConfirmCheck').disabled = !$('forcePushCheck').checked;
+  if (!$('forcePushCheck').checked) $('forceConfirmCheck').checked = false;
+};
 
 $('switchBranch').onclick = () => run('Branch switched', async () => {
   const branch = $('branchSelect').value;
@@ -1084,7 +1659,48 @@ $('switchBranch').onclick = () => run('Branch switched', async () => {
   await refreshAllLocal();
 });
 
-$('loadHistory').onclick = () => run('History refreshed', history);
+$('loadHistory').onclick = () => run('History refreshed', () => history(1));
+$('historyPrevBtn').onclick = () => run('History refreshed', () => history(historyPage - 1));
+$('historyNextBtn').onclick = () => run('History refreshed', () => history(historyPage + 1));
+
+$('refreshBranchesBtn').onclick = () => run('Branches refreshed', branches);
+$('createBranchBtn').onclick = () => run('Branch created', createBranch);
+$('renameBranchBtn').onclick = () => run('Branch renamed', renameBranch);
+$('deleteBranchBtn').onclick = () => run('Branch deleted', deleteBranch);
+
+$('mergeBtn').onclick = () => run('Merge completed', mergeBranch);
+$('refreshConflictsBtn').onclick = () => run('Conflicts refreshed', loadConflicts);
+$('abortMergeBtn').onclick = () => run('Merge aborted', async () => {
+  await api('/api/git/merge/abort', 'POST', {});
+  await loadConflicts();
+  await status();
+});
+$('commitMergeBtn').onclick = () => run('Merge committed', commitMerge);
+
+$('createStashBtn').onclick = () => run('Stash created', createStash);
+$('refreshStashBtn').onclick = () => run('Stash list refreshed', loadStashList);
+
+$('refreshRemotesBtn').onclick = () => run('Remotes refreshed', loadRemotes);
+$('addRemoteBtn').onclick = () => run('Remote added', async () => {
+  const name = $('newRemoteName').value.trim();
+  const url = $('newRemoteUrl').value.trim();
+  if (!name || !url) throw new Error('Enter both a remote name and a URL');
+  await api('/api/git/remote/add', 'POST', { name, url });
+  $('newRemoteName').value = '';
+  $('newRemoteUrl').value = '';
+  await loadRemotes();
+});
+$('setUrlRemoteBtn').onclick = () => run('Remote URL updated', async () => {
+  const name = $('setUrlRemoteName').value.trim();
+  const url = $('setUrlRemoteUrl').value.trim();
+  if (!name || !url) throw new Error('Enter both a remote name and the new URL');
+  await api('/api/git/remote/set-url', 'POST', { name, url });
+  $('setUrlRemoteName').value = '';
+  $('setUrlRemoteUrl').value = '';
+  await loadRemotes();
+});
+
+$('cloneBtn').onclick = () => run('Clone completed', cloneRepo);
 
 $('copyPath').onclick = () => run('Repository path copied', async () => {
   const path = $('repoPath').value.trim();

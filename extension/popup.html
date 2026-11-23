@@ -9,7 +9,7 @@
 <body>
 <header>
   <div class="logo">P</div>
-  <div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC · v2</small></div>
+  <div><b>PIXIJS ENGINE</b><small>GITHUB DESKTOP SYNC · v2.1</small></div>
   <span id="lamp" class="lamp" title="Bridge status"></span>
 </header>
 
@@ -25,12 +25,13 @@
 <section id="githubBox" class="github">
   <small>GITHUB ACCOUNT</small>
   <div id="githubSignedOut">
-    <p class="muted">Not signed in to GitHub yet. Open the workspace to sign in with a Personal Access Token or Device Flow.</p>
+    <p class="muted">Not signed in to GitHub yet. Open the workspace to sign in with Connect GitHub (OAuth Web), a Personal Access Token, or Device Flow.</p>
   </div>
   <div id="githubSignedIn" class="hidden">
     <img id="ghAvatar" class="avatar" alt="" src="">
     <div>
       <b id="ghLogin">—</b>
+      <span id="ghAuthMethod" class="detail">—</span>
       <span id="ghName" class="detail">—</span>
     </div>
     <button id="logout" class="ghost small" title="Sign out of GitHub">Sign out</button>
@@ -41,6 +42,7 @@
   <small>CONNECTED REPOSITORY (LOCAL)</small>
   <b id="repoName">No repository selected</b>
   <span id="branchName">—</span>
+  <span id="aheadBehindBadge" class="ahead-behind hidden" title="Commits ahead / behind the upstream branch">—</span>
   <p id="repoPath">Choose a local repository in Workspace.</p>
 </div>
 
@@ -49,6 +51,7 @@
   <button data-action="fetch">Fetch Origin</button>
   <button data-action="pull">Pull</button>
   <button data-action="push">Push</button>
+  <button data-action="sync">Sync</button>
 </div>
 
 <div class="autoupdate">

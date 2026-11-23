@@ -1,4 +1,4 @@
-/* PixiJS GitHub Desktop Sync — dashboard v2.0.0 (GitHub-dark inspired) */
+/* PixiJS GitHub Desktop Sync — dashboard v2.1.0 (GitHub-dark inspired) */
 :root{color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;background:#0d1117;color:#e6edf3;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
@@ -33,6 +33,29 @@ button.active{background:#1f6feb;border-color:#1f6feb;color:#fff}
 .user-chip{display:flex;align-items:center;gap:8px}
 .user-chip .avatar{width:28px;height:28px;border-radius:50%;background:#21262d}
 .user-chip span{font-weight:600;font-size:12px}
+.user-chip .auth-method{color:#8b949e;font-size:10px;font-weight:400;white-space:nowrap}
+
+/* ---------- v2.1: OAuth, sync, conflicts, stash, remotes ---------- */
+button.big{padding:12px;font-size:13px;font-weight:700;letter-spacing:.5px}
+.oauth-config{margin-top:12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px 12px}
+.oauth-config summary{cursor:pointer;color:#8b949e;font-size:11px;letter-spacing:.5px;font-weight:600}
+.oauth-config .hint{margin:8px 0 0}
+.check-row{display:flex;align-items:flex-start;gap:8px;font-size:11px;color:#c9d1d9;cursor:pointer;margin:10px 0 0}
+.check-row input{width:auto;margin:2px 0 0;accent-color:#1f6feb;flex:none}
+.check-row code{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:1px 5px;font-size:11px;color:#79c0ff}
+.sync-grid{display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:center;margin-bottom:10px}
+.sync-grid label{margin:0}
+.sync-grid input,.sync-grid select{margin:0}
+.sync-actions{margin:10px 0 0}
+.badge.warn{background:#9e6a03}
+#aheadBehindBadge{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#syncSteps{white-space:pre-wrap}
+.conflict-list{display:flex;flex-direction:column;gap:8px}
+.conflict-row,.stash-row,.remote-row{display:flex;align-items:center;gap:8px;padding:9px;border:1px solid #30363d;border-radius:6px;background:#0d1117;font-size:12px;flex-wrap:wrap}
+.conflict-row .path,.stash-row .path,.remote-row .path{flex:1;min-width:140px;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+.conflict-row button,.stash-row button,.remote-row button{padding:5px 10px;font-size:11px}
+.remote-row b{font-size:12px}
+#historyPageLabel{margin:0}
 
 /* ---------- layout ---------- */
 main{display:grid;grid-template-columns:330px minmax(520px,1fr);gap:16px;padding:16px;max-width:1600px;margin:auto}
