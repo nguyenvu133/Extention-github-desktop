@@ -1,12 +1,12 @@
 #!/usr/bin/env sh
 # PixiJS GitHub Desktop Sync - bridge doctor (macOS / Linux)
-# v3.5.1 - Kiem tra moi truoc khi chay bridge va ghi bao cao ra
+# v3.6.0 - Kiem tra moi truoc khi chay bridge va ghi bao cao ra
 # bridge-doctor-report.txt (gui file do lai khi nho giup).
 cd "$(dirname "$0")"
 PORT="${BRIDGE_PORT:-17321}"
 REPORT="bridge-doctor-report.txt"
 {
-echo "=== PixiJS GitHub Bridge Doctor v3.5.1 ==="
+echo "=== PixiJS GitHub Bridge Doctor v3.6.0 ==="
 echo "Ngay gio: $(date)"
 echo "Thu muc: $(pwd)"
 echo "He dieu hanh: $(uname -s) $(uname -r)"

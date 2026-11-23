@@ -2,13 +2,17 @@
 require('./_node16-fetch'); // Node 16.13 has no global fetch
 
 /*
- * tests/bat-test.js — Windows launcher / doctor script checks (v3.5.1).
+ * tests/bat-test.js — Windows launcher / doctor script checks (v3.6.0).
  *
  * Covers the five launcher/doctor scripts, which the bridge tests never
  * execute:
  *   bridge/start-windows.bat, bridge/bridge-doctor.bat,
  *   bridge/start-windows.ps1, bridge/start-mac-linux.sh,
  *   bridge/bridge-doctor.sh
+ * plus (section [9], v3.6.0) the native-host register/unregister
+ * scripts bridge/register-native-host.bat and (if it exists)
+ * bridge/unregister-native-host.bat — same bytes + structure rules,
+ * plus the registry key + manifest generation checks.
  *
  * HONEST LIMIT: cmd.exe cannot run on Linux, so the .bat files are
  * verified by BYTES + STRUCTURE only — they are NEVER executed here
@@ -586,6 +590,68 @@ async function main() {
       check(`setup-env.sh: ${name}`, re.test(text));
     }
     check('setup-env.sh: executable bit set', (fs.statSync(path.join(ROOT, 'bridge', 'setup-env.sh')).mode & 0o111) !== 0);
+  }
+
+  /* ==================== 9. register/unregister native host (v3.6.0) ==================== */
+  console.log('\n[9] register-native-host.bat + unregister-native-host.bat — native host 1 lan (v3.6.0)');
+  {
+    // HONEST LIMIT (same as [0]/[1]): .bat files are verified by BYTES +
+    // STRUCTURE only — cmd.exe cannot run on Linux, and the registry
+    // write + manifest generation have never run on real Windows here.
+    // If workstream 1 has not landed register-native-host.bat yet, this
+    // section reports it as missing instead of faking a pass.
+    const regPath = path.join(ROOT, 'bridge', 'register-native-host.bat');
+    if (!fs.existsSync(regPath)) {
+      check('register-native-host.bat: exists (cho workstream 1 — host + script chua co)', false,
+        'bridge/register-native-host.bat chua ton tai; chay lai sau khi workstream 1 tao file');
+    } else {
+      const buf = fs.readFileSync(regPath);
+      const text = checkBatchBytes(buf, 'register-native-host.bat');
+      for (const [name, re] of [
+        ['closes the setlocal scope (endlocal)', /^\s*endlocal\b/im],
+        ['writes the Chrome NativeMessagingHosts registry key (literal or %HOST_NAME%)',
+          /HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\(%HOST_NAME%|com\.pixijs\.github\.bridge)/],
+        ['defines HOST_NAME=com.pixijs.github.bridge',
+          /set\s+"HOST_NAME=com\.pixijs\.github\.bridge"/],
+        ['uses reg add (HKCU, no admin needed)', /reg\s+add\s+"?HKCU\\/i],
+        ['generates the native host manifest (native-host-manifest.json)', /native-host-manifest\.json/],
+        ['manifest points at the host (native-host.js)', /native-host\.js/],
+        ['manifest names the host com.pixijs.github.bridge', /com\.pixijs\.github\.bridge/],
+        ['asks for the extension id (placeholder, never a hardcoded real id)', /EXTENSION_ID|chrome-extension:\/\//i],
+        ['manifest allows the extension origin (allowed_origins)', /allowed_origins/],
+        ['version string matches manifest (v' + MANIFEST_VERSION + ')', new RegExp('v' + MANIFEST_VERSION.replace(/\./g, '\\.'))],
+      ]) {
+        check(`register-native-host.bat: ${name}`, re.test(text));
+      }
+      // batchChecks only fits a script with exactly one setlocal whose
+      // terminal exits close the scope (see batchChecks above). A
+      // register script that never opens a scope gets the endlocal
+      // regex check above instead of a parser failure.
+      const setlocalCount = (text.match(/^\s*setlocal\b/gim) || []).length;
+      if (setlocalCount === 1) batchChecks(text, 'register-native-host.bat');
+      else check('register-native-host.bat: exactly one setlocal (or none + plain endlocal)', setlocalCount === 0, `found ${setlocalCount}`);
+    }
+    const unregPath = path.join(ROOT, 'bridge', 'unregister-native-host.bat');
+    if (!fs.existsSync(unregPath)) {
+      console.log('  NOTE  unregister-native-host.bat: chua co — bo qua (chi kiem tra neu file ton tai)');
+    } else {
+      const buf = fs.readFileSync(unregPath);
+      const text = checkBatchBytes(buf, 'unregister-native-host.bat');
+      for (const [name, re] of [
+        ['closes the setlocal scope (endlocal)', /^\s*endlocal\b/im],
+        ['deletes the Chrome NativeMessagingHosts registry key (literal or %HOST_NAME%)',
+          /reg\s+delete\s+"?HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\(%HOST_NAME%|com\.pixijs\.github\.bridge)/i],
+        ['defines HOST_NAME=com.pixijs.github.bridge',
+          /set\s+"HOST_NAME=com\.pixijs\.github\.bridge"/],
+      ]) {
+        check(`unregister-native-host.bat: ${name}`, re.test(text));
+      }
+      check('unregister-native-host.bat: no bare reg delete of HKCU (only the host key)',
+        !/reg\s+delete\s+"?HKCU\\Software\\Google\\Chrome"?\s*$/im.test(text));
+      const setlocalCount = (text.match(/^\s*setlocal\b/gim) || []).length;
+      if (setlocalCount === 1) batchChecks(text, 'unregister-native-host.bat');
+      else check('unregister-native-host.bat: exactly one setlocal (or none + plain endlocal)', setlocalCount === 0, `found ${setlocalCount}`);
+    }
   }
 
   cleanup(failures === 0 ? 0 : 1);

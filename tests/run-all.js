@@ -1,18 +1,18 @@
 'use strict';
 /**
- * tests/run-all.js — Run the FULL v3.5.1 test suite in one command.
+ * tests/run-all.js — Run the FULL v3.6.0 test suite in one command.
  *
  *   node tests/run-all.js
  *
  * Starts a real bridge on BRIDGE_PORT (default 17321) — needed by
  * tests/extension-test.js, which reads bridge/.bridge-token — then runs
- * all 13 suites in order and stops the bridge. Exit code 0 = all pass.
+ * all 14 suites in order and stops the bridge. Exit code 0 = all pass.
  *
  * No real GitHub API is called: bridge-v2-test.js, bridge-v21-test.js,
  * bridge-v3-test.js, bridge-v301-test.js, bridge-v302-test.js, bridge-v310-test.js,
- * bridge-v311-test.js, bridge-v350-test.js and env-test.js use their own mock GitHub
+ * bridge-v311-test.js, bridge-v350-test.js, native-host-test.js and env-test.js use their own mock GitHub
  * servers and their own bridges on ports 17399, 17398, 17397, 17395,
- * 17394, 17386, 17387, 17388 and 17391-17393 (mocks on 17412, 17413, 17414 and 17415).
+ * 17394, 17386, 17387, 17388, 17417 and 17391-17393 (mocks on 17412, 17413, 17414, 17418 and 17415).
  * bat-test.js checks the launcher/doctor scripts by bytes + structure
  * (.bat files are never executed — no cmd.exe on Linux) and runs the
  * .sh launchers for real against its own bridges on ports 17389/17390.
@@ -35,7 +35,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v3.5.1 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v3.6.0 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -70,6 +70,7 @@ async function main() {
     ['validate-manifest.js', 'Manifest (root + extension/)'],
     ['load-from-root-test.js', 'Load unpacked from repo root or extension/'],
     ['bat-test.js', 'Launcher/doctor scripts (bytes + batch parser + .sh real runs)'],
+    ['native-host-test.js', 'Native host v3.6.0 (framed stdio protocol + start-bridge/get-token/status/setup-env + no token leak)'],
     ['bridge-v2-test.js', 'Bridge v2 (mock GitHub API + dashboard in vm)'],
     ['bridge-v21-test.js', 'Bridge v2.1 (push/pull expansion + OAuth Web Flow + auto-sync)'],
     ['bridge-v3-test.js', 'Bridge v3.0 (login diagnostics + PAT guard + zip + GitHub API v3 + cherry-pick/revert/reset/tags)'],

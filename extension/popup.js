@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — popup v3.5.0
+ * PixiJS GitHub Desktop Sync — popup v3.6.0
  *
  * Shows, at a glance: bridge connection state (with reconnect), the
  * signed-in GitHub account (with its sign-in method and email), the
@@ -27,7 +27,7 @@
  */
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, settingsDefaultBranch: '', settingsNotifications: true };
+const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, settingsDefaultBranch: '', settingsNotifications: true, autoStartBridge: false };
 
 let bridgeState = 'checking'; // 'connected' | 'reconnecting' | 'disconnected'
 let pollTimer = null;
@@ -61,6 +61,7 @@ async function settings() {
     autoUpdateInterval: Number(s.autoUpdateInterval) || 60,
     settingsDefaultBranch: String(s.settingsDefaultBranch || '').trim(),
     settingsNotifications: s.settingsNotifications !== false,
+    autoStartBridge: !!s.autoStartBridge,
   };
 }
 
@@ -292,7 +293,56 @@ async function reconnect() {
   await refresh();
 }
 
+// v3.6.0 — one-click bridge start via the Native Messaging host
+// (extension/native-bridge.js). Reuses the existing storage: the token
+// + bridgeUrl from the host are saved with chrome.storage.local
+// exactly like a manually pasted token, and api() picks them up from
+// settings() unchanged. The token is never logged. Host not installed
+// -> Vietnamese install guide, and the manual flow (paste token,
+// reconnect) keeps working.
+let nativeStartInFlight = false;
+
+async function startBridgeOnce() {
+  if (bridgeState === 'connected') {
+    $('startBridgeStatus').textContent = 'Bridge đã chạy (CONNECTED).';
+    return true;
+  }
+  if (nativeStartInFlight) return false;
+  nativeStartInFlight = true;
+  const btn = $('startBridgeBtn');
+  if (btn) btn.disabled = true;
+  $('startBridgeStatus').textContent = 'Đang mở bridge…';
+  try {
+    const res = await startBridgeViaNative();
+    const s = await settings();
+    await chrome.storage.local.set({ token: res.token, bridgeUrl: res.bridgeUrl || s.bridgeUrl });
+    $('token').value = res.token;
+    $('startBridgeStatus').textContent = 'Bridge đã mở — đang kiểm tra kết nối…';
+    await refresh();
+    if (bridgeState === 'connected') {
+      $('startBridgeStatus').textContent = 'CONNECTED — bridge đã chạy.';
+      return true;
+    }
+    $('startBridgeStatus').textContent = 'Bridge đã mở nhưng chưa kết nối được — bấm nút reconnect (↻).';
+    return false;
+  } catch (err) {
+    if (err && err.code === NATIVE_HOST_NOT_INSTALLED_CODE) {
+      $('startBridgeStatus').textContent = err.short;
+      $('bridgeDetail').textContent = err.detail || '';
+      $('message').textContent = 'Chưa cài Native Host — xem hướng dẫn ở trên.';
+    } else {
+      showError(err);
+      $('startBridgeStatus').textContent = (err && err.short) || String((err && err.message) || err);
+    }
+    return false;
+  } finally {
+    nativeStartInFlight = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
 $('reconnect').onclick = reconnect;
+$('startBridgeBtn').onclick = startBridgeOnce;
 $('refresh') && ($('refresh').onclick = refresh);
 
 $('saveToken').onclick = async () => {
@@ -384,5 +434,15 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 });
 
 $('version').textContent = 'v' + chrome.runtime.getManifest().version;
-refresh();
 pollTimer = setInterval(() => { refresh(); }, 10000);
+
+// v3.6.0: boot once — refresh first, then auto-start at most once when
+// the user enabled it and the bridge is still down. The 10 s poll
+// above never auto-starts (no spam, no loop).
+(async () => {
+  await refresh();
+  try {
+    const s = await settings();
+    if (s.autoStartBridge && bridgeState !== 'connected') await startBridgeOnce();
+  } catch (_) { /* auto-start is best-effort; the manual button stays */ }
+})();

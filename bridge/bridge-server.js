@@ -145,7 +145,7 @@ function loadDotEnv() {
 }
 const DOTENV_KEYS = loadDotEnv();
 
-const VERSION = '3.5.1';
+const VERSION = '3.6.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);

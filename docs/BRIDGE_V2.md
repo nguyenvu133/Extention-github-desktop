@@ -1000,3 +1000,86 @@ sót sau khi chạy.
 - `tests/e2e-toolbar.js` (Chromium thật + extension + bridge + remote thật + clone repo public từ github.com): 49/49 trên Node 16.13.0 và Node 20.
 - `node tests/run-all.js`: 10 suite, ALL SUITES PASSED trên Node 16.13.0 và 20.
 - Các lỗi tìm ra trong lúc chạy e2e và đã sửa: dòng trạng thái bị dòng tiến trình ghi đè (mất "Đang …"); popup bị ghi đè kết quả; `new Option` không chạy trong DOM giả lập của test cũ.
+
+---
+
+## 11. v3.6.0 — Nút 1 chạm mở bridge (Native Messaging host)
+
+> Phiên bản: **3.6.0** · Ngày: 2026-11-23
+> Vấn đề user gặp: mỗi lần dùng extension đều phải mở `start-windows.bat`
+> / terminal bằng tay trước — quên là đèn đỏ. Chrome không cho extension
+> tự chạy file `.bat`, nên cách duy nhất là đăng ký 1 lần 1 Native
+> Messaging host rồi extension bấm nút là host chạy bridge thay.
+
+### 11.1. Cơ chế (ngắn gọn)
+
+- Host: `bridge/native-host.js` (Node thuần, không dependency), tên
+  `com.pixijs.github.bridge`. Giao thức Native Messaging chuẩn của
+  Chrome: stdio, mỗi message = 4-byte little-endian length + JSON UTF-8.
+  stdout chỉ dành cho framed JSON — mọi log đi stderr, token không bao
+  giờ được in/log.
+- Actions: `start-bridge` (bridge chưa chạy → chạy launcher, đợi
+  `/health`, trả token; đã chạy → trả lại token cũ),
+  `get-token`, `status` (`running: true/false`), `setup-env` (chỉ
+  *chạy* setup launcher rồi trả ngay — vì setup hỏi PAT/OAuth tương tác),
+  action lạ → `{ok:false, error}` chứ không crash.
+- Host **chỉ chạy 2 launcher có sẵn** trong `bridge/`
+  (`start-windows.bat` / `start-mac-linux.sh`, `setup-env.bat` /
+  `setup-env.sh`), không bao giờ chạy lệnh lạ từ message. Env override
+  `NATIVE_HOST_LAUNCHER` / `NATIVE_HOST_SETUP_LAUNCHER` chỉ tồn tại
+  cho test.
+- Cài 1 lần: `bridge/register-native-host.bat` (dán Extension ID từ
+  `chrome://extensions` → sinh `bridge/native-host-manifest.json` +
+  ghi `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pixijs.github.bridge`;
+  file manifest thật đã gitignore) hoặc
+  `bridge/register-native-host.sh` trên macOS/Linux (ghi
+  `~/.config/google-chrome/NativeMessagingHosts/`); gỡ bằng
+  `bridge/unregister-native-host.bat`. Extension thêm quyền
+  `nativeMessaging` + `extension/native-bridge.js` + nút
+  **KHỞI ĐỘNG BRIDGE** ở popup/dashboard (xem README mục 3).
+- Bảo mật: manifest + registry key **không chứa token/secret nào**;
+  host chỉ trả token bridge cho extension có trong `allowed_origins`.
+
+### 11.2. Kiểm thử (workstream TEST + DOCS)
+
+- `tests/native-host-test.js` (mới, 27 checks): host thật + bridge thật
+  trên cổng test 17417 (mock GitHub 17418) + stub launcher/setup qua env
+  override; stub ghi `.env` giả chỉ trong `BRIDGE_DATA_DIR` riêng của
+  test (bridge/.env thật không đụng tới). Kiểm tra: framed round-trip,
+  status trước/sau khi chạy, `start-bridge` trả token **dùng được thật**
+  (GET `/health` với Bearer token đó → 200), `get-token` trả cùng token,
+  `setup-env` ghi được `.env`, action lạ → lỗi không crash, host không
+  in token ra stdout (ngoài JSON framed) hay stderr; bytes rác thô
+  không framing → host log `frame too large` rồi thoát sạch mã 1
+  (không phải crash: length prefix hỏng thì stream không resync được,
+  Chrome chạy lại host khi cần — xem mục 11.3).
+  Kết quả chạy thật: **27/27**. Token trong test là giá trị giả
+  (`v360-fake-…`), không có secret thật.
+- `tests/bat-test.js` mục [9] (mới, 44 checks): `register-native-host.bat`
+  + `unregister-native-host.bat` theo đúng chuẩn cũ (CRLF từng dòng,
+  100% ASCII, không BOM, đúng 1 setlocal, mọi exit đều có endlocal +
+  pause, đúng registry key `HKCU\...\NativeMessagingHosts\com.pixijs.github.bridge`,
+  sinh manifest, hỏi Extension ID). Kết quả: **176/176** (toàn bộ
+  bat-test, gồm cả mục [9]).
+- Các suite cũ đã đổi assert version 3.5.1 → 3.6.0 (chỉ assert, không
+  sửa logic) và chạy lại đều pass trên code 3.6.0 hiện tại:
+  `bridge-v302-test.js` 82/82, `bridge-v310-test.js` 55/55,
+  `bridge-v311-test.js` 27/27, `env-test.js` 22/22.
+- `tests/run-all.js`: 13 → **14 suite** (thêm `native-host-test.js`).
+
+### 11.3. Chưa khớp / chưa kiểm chứng
+
+1. **Bytes rác không framing → host thoát sạch mã 1 (đã quyết định,
+   không phải lỗi):** gửi bytes rác thô vào stdin, 4 byte đầu bị đọc
+   thành độ dài frame ~1,1 tỉ byte → host log `frame too large (…
+   bytes), dropping connection` rồi `process.exit(1)` (code ở
+   `bridge/native-host.js`, hàm `processFrames`). Đây là tắt có chủ ý,
+   có log, không phải crash: length prefix hỏng thì stream không
+   resync được (không có sync marker), và Chrome chạy lại host ở lần
+   `connectNative` tiếp theo. Test mục [7] assert đúng hành vi này
+   (exit code 1, không signal, stderr có `frame too large`) — pass.
+   JSON sai có framing đúng thì host vẫn trả lỗi và sống tiếp (đã pass).
+2. `.bat` đăng ký/gỡ + nút KHỞI ĐỘNG BRIDGE **chưa test thật trên
+   Windows / Chrome thật**: `.bat` mới chỉ kiểm chứng bằng bytes +
+   cấu trúc trên Linux; chưa ai đúp chuột thật, chưa ghi registry thật,
+   chưa bấm nút trên Chrome thật (giới hạn đã ghi rõ trong README mục 3).

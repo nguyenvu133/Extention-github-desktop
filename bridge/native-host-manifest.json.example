@@ -1,0 +1,9 @@
+{
+  "name": "com.pixijs.github.bridge",
+  "description": "PixiJS GitHub Bridge native host (one-click bridge start)",
+  "path": "C:\\Users\\YOUR_NAME\\path\\to\\bridge\\native-host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID_HERE/"
+  ]
+}

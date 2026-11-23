@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.5.0
+ * PixiJS GitHub Desktop Sync — dashboard v3.6.0
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
@@ -34,7 +34,7 @@
  */
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, lastRepo: '', settingsDefaultBranch: '', settingsNotifications: true };
+const DEFAULTS = { bridgeUrl: 'http://127.0.0.1:17321', token: '', autoUpdateEnabled: false, autoUpdateInterval: 60, lastRepo: '', settingsDefaultBranch: '', settingsNotifications: true, autoStartBridge: false };
 
 let bridgeState = 'disconnected'; // 'connected' | 'reconnecting' | 'disconnected'
 let healthTimer = null;
@@ -81,6 +81,7 @@ async function cfg() {
     lastRepo: String(s.lastRepo || ''),
     settingsDefaultBranch: String(s.settingsDefaultBranch || '').trim(),
     settingsNotifications: s.settingsNotifications !== false,
+    autoStartBridge: !!s.autoStartBridge,
   };
 }
 
@@ -375,6 +376,71 @@ async function reconnectNow() {
   if (ok) {
     startEventStream();
     await refreshGithubState().catch((err) => log('ERROR: ' + err.message));
+  }
+}
+
+// v3.6.0 — one-click bridge start via the Native Messaging host
+// (extension/native-bridge.js). Same storage as the manual flow: the
+// host's token + bridgeUrl are saved to chrome.storage.local (token /
+// bridgeUrl) and api() picks them up unchanged. The token is never
+// logged. Host not installed -> Vietnamese install guide in the panel;
+// every manual flow (paste token, CONNECT BRIDGE, GitHub sign-in)
+// keeps working untouched.
+let nativeStartInFlight = false;
+let autoStartAttempted = false;
+
+async function startBridgeOnce() {
+  if (bridgeState === 'connected') {
+    $('startBridgeStatus').textContent = 'Bridge đã chạy (BRIDGE CONNECTED).';
+    return true;
+  }
+  if (nativeStartInFlight) return false;
+  nativeStartInFlight = true;
+  const btn = $('startBridgeBtn');
+  if (btn) btn.disabled = true;
+  $('startBridgeStatus').textContent = 'Đang mở bridge…';
+  try {
+    const res = await startBridgeViaNative();
+    const c = await cfg();
+    await chrome.storage.local.set({ token: res.token, bridgeUrl: res.bridgeUrl || c.bridgeUrl });
+    $('token').value = res.token;
+    $('bridgeUrl').value = res.bridgeUrl || c.bridgeUrl;
+    $('startBridgeStatus').textContent = 'Bridge đã mở — đang kiểm tra kết nối…';
+    stopEventStream();
+    const ok = await health();
+    if (!ok) {
+      $('startBridgeStatus').textContent = 'Bridge đã mở nhưng chưa kết nối được — kiểm tra lại Bridge URL rồi bấm CONNECT BRIDGE.';
+      return false;
+    }
+    startEventStream();
+    await refreshGithubState().catch((err) => log('ERROR: ' + err.message));
+    if (localConnected) await refreshAllLocal().catch((err) => log('ERROR: ' + err.message));
+    $('startBridgeStatus').textContent = 'CONNECTED — bridge đã chạy.';
+    return true;
+  } catch (err) {
+    if (err && err.code === NATIVE_HOST_NOT_INSTALLED_CODE) {
+      $('startBridgeStatus').textContent = err.short + '\n' + (err.detail || '');
+    } else {
+      $('startBridgeStatus').textContent = (err && err.short) || String((err && err.message) || err);
+    }
+    throw err;
+  } finally {
+    nativeStartInFlight = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+// v3.6.0 — auto-start, called at most ONCE per dashboard open, only
+// when the user enabled it. Never loops, never spams: a failure just
+// leaves the manual flow (and the button) in place.
+async function tryAutoStartBridge() {
+  if (autoStartAttempted) return false;
+  autoStartAttempted = true;
+  try {
+    return await startBridgeOnce();
+  } catch (err) {
+    log('Auto-start bridge: ' + ((err && err.short) || (err && err.message) || err));
+    return false;
   }
 }
 
@@ -2880,6 +2946,14 @@ $('navSettings').onclick = () => {
 $('backToRepos').onclick = () => { currentRepo = null; showView('repos'); };
 $('reconnectBtn').onclick = () => run('Reconnect', reconnectNow);
 
+// v3.6.0: one-click bridge start + auto-start preference. The manual
+// flow (paste token, CONNECT BRIDGE) is untouched and keeps working
+// when the host is not installed.
+$('startBridgeBtn').onclick = () => run('Bridge started', startBridgeOnce);
+$('autoStartBridge').onchange = async () => {
+  await chrome.storage.local.set({ autoStartBridge: $('autoStartBridge').checked });
+};
+
 $('saveConnection').onclick = () => run('Connection saved', async () => {
   await chrome.storage.local.set({
     bridgeUrl: normalizeBase($('bridgeUrl').value),
@@ -4397,6 +4471,7 @@ dbRender();
   const c = await cfg();
   $('bridgeUrl').value = c.bridgeUrl;
   $('token').value = c.token;
+  $('autoStartBridge').checked = !!c.autoStartBridge; // v3.6.0
   $('autoUpdateToggle').checked = !!c.autoUpdateEnabled;
   if (c.autoUpdateInterval) $('autoUpdateInterval').value = String(c.autoUpdateInterval);
   // v3.0 settings from storage.
@@ -4419,7 +4494,14 @@ dbRender();
   // the bridge is up.
   setLoginEnabled(false);
   startHealthPoll();
-  const ok = await health();
+  let ok = await health();
+  // v3.6.0: auto-start at most ONCE per dashboard open, only when the
+  // user enabled it and the bridge is still down. The health poll
+  // itself never auto-starts (no loop, no spam).
+  if (!ok && c.autoStartBridge) {
+    const started = await tryAutoStartBridge();
+    if (started) ok = await health();
+  }
   if (!ok) {
     log('Bridge offline. ' + BRIDGE_START_SHORT + ' Trang này sẽ tự kết nối lại khi bridge chạy.');
     return;

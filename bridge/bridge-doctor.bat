@@ -1,14 +1,14 @@
 @echo off
 REM PixiJS GitHub Desktop Sync - bridge doctor (Windows)
-REM v3.5.1 - CRLF + ASCII only. Kiem tra moi truoc khi chay bridge
+REM v3.6.0 - CRLF + ASCII only. Kiem tra moi truoc khi chay bridge
 REM va ghi bao cao ra bridge-doctor-report.txt (gui file do lai khi nho giup).
 setlocal EnableDelayedExpansion
 title PixiJS GitHub Bridge Doctor
 cd /d "%~dp0"
 if not defined BRIDGE_PORT set BRIDGE_PORT=17321
 set REPORT=bridge-doctor-report.txt
-echo PixiJS GitHub Bridge Doctor v3.5.1 - %DATE% %TIME% > "%REPORT%"
-call :r "=== PixiJS GitHub Bridge Doctor v3.5.1 ==="
+echo PixiJS GitHub Bridge Doctor v3.6.0 - %DATE% %TIME% > "%REPORT%"
+call :r "=== PixiJS GitHub Bridge Doctor v3.6.0 ==="
 call :r "Ngay gio: %DATE% %TIME%"
 call :r "Thu muc: %CD%"
 call :r "Cong kiem tra: %BRIDGE_PORT%"

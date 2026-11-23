@@ -1,5 +1,5 @@
 @echo off
-REM bridge\setup-env.bat - v3.5.1 - CRLF + ASCII only.
+REM bridge\setup-env.bat - v3.6.0 - CRLF + ASCII only.
 REM Tao bridge\.env mot lan duy nhat (Windows).
 REM Hoi 3 gia tri (PAT GitHub, OAuth Client ID, OAuth Client Secret) +
 REM duong dan repo mac dinh, roi ghi vao bridge\.env.

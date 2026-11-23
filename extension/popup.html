@@ -22,6 +22,10 @@
   <button id="reconnect" class="ghost" title="Reconnect to the bridge">&#8635;</button>
 </section>
 
+<!-- v3.6.0: one-click bridge start via the Native Messaging host. -->
+<button id="startBridgeBtn" class="primary" title="Mở bridge bằng Native Host (cài 1 lần duy nhất)">KHỞI ĐỘNG BRIDGE</button>
+<p id="startBridgeStatus" class="detail"></p>
+
 <section id="githubBox" class="github">
   <small>GITHUB ACCOUNT</small>
   <div id="githubSignedOut">
@@ -76,6 +80,7 @@
 
 <footer><span id="version">v—</span><span id="message">Ready</span></footer>
 <script src="bridge-client.js"></script>
+<script src="native-bridge.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

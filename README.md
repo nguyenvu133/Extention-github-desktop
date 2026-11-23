@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.5.1
+# PixiJS GitHub Desktop Sync — v3.6.0
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -137,6 +137,56 @@ Keep this terminal open. Press Ctrl+C to stop.
 **Giữ cửa sổ terminal này mở** trong suốt thời gian dùng extension. Tắt terminal
 = tắt bridge = extension báo Disconnected (nhưng sẽ tự kết nối lại khi bạn
 mở bridge lên — xem mục 13).
+
+### Nút 1 chạm mở bridge (v3.6.0) — cài host 1 lần, rồi bấm là chạy
+
+Từ v3.6.0, popup và dashboard có nút **KHỞI ĐỘNG BRIDGE**: bấm 1 lần là
+bridge tự chạy lên (không cần mở `start-windows.bat` / terminal bằng tay
+nữa) rồi extension tự lấy token và kết nối. Cơ chế: extension nói chuyện
+với **Native Messaging host** (`bridge/native-host.js`, tên
+`com.pixijs.github.bridge`) qua stdio; host này chạy launcher có sẵn
+trong thư mục `bridge/` và trả token bridge về cho extension.
+
+**Cài 1 lần duy nhất (Windows + Chrome):**
+
+1. Mở Chrome, vào `chrome://extensions`, bật **Developer mode**.
+2. Copy **Extension ID** (32 ký tự, dạng `abcdefghijklmnop...`) của
+   extension PixiJS GitHub Desktop Sync.
+3. Đúp chuột `bridge\register-native-host.bat`, dán Extension ID vào khi
+   được hỏi. File này sinh `bridge\native-host-manifest.json` (đường dẫn
+   tuyệt đối + ID thật) và ghi registry key
+   `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pixijs.github.bridge`
+   trỏ tới manifest đó.
+4. **Tắt hết cửa sổ Chrome rồi mở lại** (Chrome chỉ đọc Native Messaging
+   host khi khởi động), vào `chrome://extensions` bấm **Reload** trên
+   extension này.
+5. Mở popup (hoặc dashboard) và bấm **KHỞI ĐỘNG BRIDGE** — đèn phải
+   chuyển xanh mà không cần chạy `start-windows.bat` bằng tay. Nếu đổi
+   Extension ID (cài lại extension), chạy lại file `.bat` ở bước 3.
+   Muốn gỡ: chạy `bridge\unregister-native-host.bat` (xoá registry key
+   + file manifest đã sinh).
+
+**GIỚI HẠN NÓI THẬT:**
+
+- Extension **không thể tự chạy file `.bat`** — đó là giới hạn của
+  Chrome, không phải lỗi của extension. Bắt buộc phải cài host 1 lần
+  bằng tay theo 5 bước trên; sau đó mới bấm 1 chạm được.
+- File `register-native-host.bat` / `unregister-native-host.bat` mới chỉ
+  được **kiểm chứng bằng bytes + cấu trúc trên Linux** (CRLF từng dòng,
+  ASCII thuần, không BOM, đúng registry key, sinh manifest — xem
+  `tests/bat-test.js` mục [9]); **chưa test thật trên Windows** (không
+  có máy Windows ở đây): chưa ai đúp chuột thật, chưa ghi registry
+  thật, chưa bấm nút KHỞI ĐỘNG BRIDGE trên Chrome thật.
+- File manifest thật (`bridge/native-host-manifest.json`) chứa đường dẫn
+  tuyệt đối trên máy bạn + Extension ID nên **đã gitignore, không đẩy
+  lên GitHub**; chỉ có file mẫu
+  `bridge/native-host-manifest.json.example` (chứa placeholder
+  `YOUR_EXTENSION_ID_HERE`) là được commit.
+- Trên macOS/Linux không có `.bat`: chạy
+  `sh bridge/register-native-host.sh` (cùng 3 bước lấy Extension ID),
+  nó ghi manifest vào
+  `~/.config/google-chrome/NativeMessagingHosts/com.pixijs.github.bridge.json`.
+  Script này cũng mới chỉ kiểm chứng bằng đọc code, chưa chạy thật.
 
 ### Đổi cổng (không bắt buộc)
 
@@ -626,7 +676,12 @@ Extention-github-desktop/
 ├── .gitignore                     # .bridge-token, .bridge-state.json, .github-config.json, ...
 ├── bridge/
 │   ├── bridge-server.js           # Bridge v3.0.2: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3 + connection-test + CORS localhost/null
-│   ├── package.json               # version 3.0.2, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all
+│   ├── native-host.js             # Native Messaging host v3.6.0 (stdio 4-byte LE + JSON, chỉ chạy 2 launcher có sẵn, không in token)
+│   ├── native-host.bat            # Wrapper chạy native-host.js (đích của manifest)
+│   ├── native-host-manifest.json.example  # Mẫu manifest (placeholder YOUR_EXTENSION_ID_HERE) — file thật đã gitignore
+│   ├── register-native-host.bat / unregister-native-host.bat  # Đăng ký / gỡ host 1 lần (Windows, ghi registry HKCU...NativeMessagingHosts)
+│   ├── register-native-host.sh    # Đăng ký host 1 lần (macOS/Linux, ghi ~/.config/google-chrome/NativeMessagingHosts/)
+│   ├── package.json               # version 3.6.0, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all/test:v360
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   ├── start-windows.bat          # Chạy bridge (Windows) — CRLF + ASCII, kiểm tra Node/cổng, đợi /health, ghi bridge-start.log
 │   ├── start-windows.ps1          # Chạy bridge (Windows, PowerShell) — phương án 2 khi .bat bị chặn
@@ -634,22 +689,26 @@ Extention-github-desktop/
 │   └── bridge-doctor.sh           # Chẩn đoán macOS/Linux — ghi bridge-doctor-report.txt
 ├── extension/
 │   ├── manifest.json              # Manifest MV3 ở extension/ (Load unpacked từ đây)
+│   ├── native-bridge.js           # v3.6.0: gọi Native Messaging host (nút KHỞI ĐỘNG BRIDGE)
 │   ├── background.js              # Service worker: mở dashboard
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 8 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 14 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
 │   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
 │   ├── bridge-v3-test.js          # Test v3.0: chẩn đoán đăng nhập + zip + API v3 + git local mới
 │   ├── bridge-v301-test.js        # Test v3.0.1: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
 │   ├── bridge-v302-test.js        # Test v3.0.2: .bat CRLF/ASCII + .ps1 + doctor + launcher đợi /health
+│   ├── bridge-v350-test.js        # Test v3.5.0: pull origin trên git thật + mock-OAuth end-to-end + Actions/repo pages/worktrees
+│   ├── native-host-test.js        # Test v3.6.0: host Native Messaging thật (framed stdio + start-bridge/get-token/status/setup-env + không lộ token)
+│   ├── bat-test.js                # Test .bat/.ps1/.sh theo byte + cấu trúc + register/unregister native host (176 checks)
 │   ├── bridge-client.js           # (nằm ở extension/) helper fetch tập trung: dịch lỗi mạng sang tiếng Việt
 │   ├── extension-test.js          # Test UI v3.0.1 (cần bridge chạy)
 │   ├── validate-manifest.js       # Kiểm tra cả 2 manifest
 │   └── load-from-root-test.js     # Kiểm tra Load unpacked từ root/extension
 └── docs/
-    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0/v3.0.1/v3.0.2 + số liệu test
+    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0/v3.0.1/v3.0.2/v3.6.0 + số liệu test
 ```
 
 ---
@@ -661,6 +720,7 @@ Extention-github-desktop/
 | **Token GitHub (PAT/OAuth)** | `bridge/.github-config.json` trên máy bạn, mode 0600, đã gitignore (hoặc `GITHUB_PAT` trong `bridge/.env`, cũng 0600 và gitignore) | Chỉ bridge (đọc file) — **không gửi cho extension, không log, không commit** |
 | **OAuth App Client Secret** | `bridge/.github-oauth.json` trên máy bạn, mode 0600, đã gitignore (hoặc biến môi trường `GITHUB_OAUTH_CLIENT_SECRET` / `bridge/.env`) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
 | **Token bridge** | `bridge/.bridge-token` trên máy bạn, mode 0600, đã gitignore; bản copy trong `chrome.storage` của extension (hoặc `BRIDGE_TOKEN` trong `bridge/.env`) | Extension (để gọi API bridge), bạn (copy từ terminal) |
+| **Native host 1 chạm** (v3.6.0) | `bridge/native-host-manifest.json` (sinh bởi `register-native-host.bat` / `.sh`, đã gitignore — chứa đường dẫn tuyệt đối + Extension ID) + registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pixijs.github.bridge` (Windows) hoặc `~/.config/google-chrome/NativeMessagingHosts/com.pixijs.github.bridge.json` (macOS/Linux) | Chỉ Chrome (để tìm host) — **không chứa token/secret nào**; host chỉ chạy 2 launcher có sẵn trong `bridge/` và chỉ trả token bridge cho extension đã đăng ký trong `allowed_origins` |
 | **Cài đặt** (URL bridge, repo local, auto-update) | `chrome.storage` | Chỉ extension |
 
 - Extension **không bao giờ** giữ token GitHub thô hay Client Secret. Mọi lệnh
@@ -916,7 +976,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 13 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 14 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -935,7 +995,8 @@ node tests/bridge-v302-test.js       # 82 checks: .bat CRLF/ASCII + .ps1 + docto
 node tests/bridge-v310-test.js       # 55 checks: pull/push mở rộng (preview, autostash, undo, rebase, all-branches)
 node tests/bridge-v311-test.js       # toolbar luôn hiện (recent/find repo, fetch từng remote, clone, publish branch)
 node tests/bridge-v350-test.js       # pull origin trên git thật + mock-OAuth end-to-end + Actions/repo pages/worktrees
-node tests/bat-test.js               # 105 checks: .bat/.ps1/.sh theo byte + cấu trúc (không cần Windows)
+node tests/native-host-test.js      # host Native Messaging thật: framed stdio + start-bridge/get-token/status/setup-env + không lộ token
+node tests/bat-test.js               # 176 checks: .bat/.ps1/.sh theo byte + cấu trúc (không cần Windows) + register/unregister native host
 node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN bridge đang chạy ở 17321)
 ```
 
@@ -1010,6 +1071,26 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.6.0 (2026-11-23)** — **Nút 1 chạm mở bridge:** popup và
+  dashboard có nút **KHỞI ĐỘNG BRIDGE** — bấm 1 lần là bridge tự chạy
+  lên rồi extension tự lấy token và kết nối, không cần mở
+  `start-windows.bat` / terminal bằng tay nữa. Cơ chế: Native Messaging
+  host `bridge/native-host.js` (tên `com.pixijs.github.bridge`, giao
+  thức stdio 4-byte little-endian length + JSON, actions
+  `start-bridge` / `setup-env` / `get-token` / `status`, chỉ chạy 2
+  launcher có sẵn trong `bridge/`, không bao giờ in token ra stdout);
+  cài host 1 lần bằng `bridge/register-native-host.bat` (dán Extension
+  ID từ `chrome://extensions`, ghi registry key
+  `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pixijs.github.bridge`
+  + sinh manifest) hoặc `bridge/register-native-host.sh` trên
+  macOS/Linux; gỡ bằng `bridge/unregister-native-host.bat`; quyền
+  `nativeMessaging` trong manifest. **Giới hạn nói thật:** extension
+  không thể tự chạy `.bat` nên bắt buộc cài host 1 lần bằng tay;
+  `.bat` đăng ký mới chỉ kiểm chứng bằng bytes + cấu trúc trên Linux,
+  chưa test thật trên Windows (chưa ghi registry thật, chưa bấm nút
+  trên Chrome thật). Test: 14 suite (suite mới
+  `tests/native-host-test.js` 27/27; `tests/bat-test.js` 176/176 gồm
+  mục [9] kiểm tra register/unregister).
 - **v3.5.1 (2026-11-23)** — **Cấu hình tự động bằng file `.env` (mở lên
   là dùng được):** bridge tự đọc `bridge/.env` khi khởi động —
   `BRIDGE_TOKEN` ổn định (không đổi mỗi lần tải lại), `GITHUB_PAT` tự
