@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.0.1
+# PixiJS GitHub Desktop Sync — v3.0.2
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -84,6 +84,32 @@ cd bridge
 node bridge-server.js
 ```
 
+**Nếu đúp chuột vào `start-windows.bat` mà không mở được** (cửa sổ nháy
+rồi tắt hoặc không hiện gì) — xem ngay mục 13
+\"Không mở được start-windows.bat\". Tóm tắt: file `.bat` từ v3.0.2 đã
+viết lại đúng chuẩn Windows (CRLF + ASCII, kiểm tra Node, kiểm tra cổng,
+ghi log ra `bridge\bridge-start.log`, đợi `/health` rồi mới báo thành
+công, mọi lỗi đều giữ cửa sổ mở). Nếu vẫn không mở được:
+
+1. Kiểm tra đã **giải nén ZIP** ra thư mục chưa (đừng chạy file trong ZIP).
+2. Kiểm tra đã cài **Node.js 18+** chưa (`node -v` trong cmd).
+3. Nếu Windows SmartScreen chặn: chuột phải file → **Properties** →
+   tích **Unblock** (nếu có) → **OK**, rồi đúp chuột lại; hoặc bấm
+   **More info → Run anyway** trên màn hình SmartScreen.
+4. Thử **phương án 2 — PowerShell**: chuột phải
+   `bridge\start-windows.ps1` → **Run with PowerShell** (hoặc mở
+   PowerShell rồi chạy
+   `powershell -ExecutionPolicy Bypass -File .\start-windows.ps1`).
+5. Chạy **chẩn đoán**: đúp `bridge\bridge-doctor.bat` — nó kiểm tra
+   Node, file, cổng 17321, quyền ghi rồi ghi báo cáo ra
+   `bridge\bridge-doctor-report.txt`. Gửi file đó lại khi cần giúp.
+6. Chạy tay bằng cmd (luôn được): mở cmd, `cd` tới thư mục `bridge`
+   rồi gõ `node bridge-server.js`.
+
+**Giữ cửa sổ bridge mở** trong lúc dùng extension — đóng cửa sổ là tắt
+bridge. Nếu cửa sổ bridge lỡ tắt, chạy lại file `.bat` (nó sẽ báo nếu
+bridge đã chạy sẵn ở cổng 17321 thì cứ dùng luôn).
+
 ### macOS / Linux
 
 ```bash
@@ -95,7 +121,7 @@ cd bridge
 Khi chạy đúng, terminal sẽ hiện tương tự:
 
 ```
-PixiJS GitHub Bridge v3.0.1
+PixiJS GitHub Bridge v3.0.2
 Listening: http://127.0.0.1:17321
 Token file: bridge/.bridge-token
 TOKEN:      ab12cd34ef56... (token của bạn)
@@ -482,27 +508,31 @@ Extention-github-desktop/
 ├── README.md                      # File này
 ├── .gitignore                     # .bridge-token, .bridge-state.json, .github-config.json, ...
 ├── bridge/
-│   ├── bridge-server.js           # Bridge v3.0.1: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3 + connection-test + CORS localhost/null
-│   ├── package.json               # version 3.0.1, scripts start/test/test:v21/test:v3/test:v301/test:all
+│   ├── bridge-server.js           # Bridge v3.0.2: Git local + GitHub API + SSE + auto-update + auto-sync + zip + API v3 + connection-test + CORS localhost/null
+│   ├── package.json               # version 3.0.2, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
-│   └── start-windows.bat          # Chạy bridge (Windows)
+│   ├── start-windows.bat          # Chạy bridge (Windows) — CRLF + ASCII, kiểm tra Node/cổng, đợi /health, ghi bridge-start.log
+│   ├── start-windows.ps1          # Chạy bridge (Windows, PowerShell) — phương án 2 khi .bat bị chặn
+│   ├── bridge-doctor.bat          # Chẩn đoán Windows — ghi bridge-doctor-report.txt
+│   └── bridge-doctor.sh           # Chẩn đoán macOS/Linux — ghi bridge-doctor-report.txt
 ├── extension/
 │   ├── manifest.json              # Manifest MV3 ở extension/ (Load unpacked từ đây)
 │   ├── background.js              # Service worker: mở dashboard
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 7 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 8 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
 │   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
 │   ├── bridge-v3-test.js          # Test v3.0: chẩn đoán đăng nhập + zip + API v3 + git local mới
 │   ├── bridge-v301-test.js        # Test v3.0.1: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
+│   ├── bridge-v302-test.js        # Test v3.0.2: .bat CRLF/ASCII + .ps1 + doctor + launcher đợi /health
 │   ├── bridge-client.js           # (nằm ở extension/) helper fetch tập trung: dịch lỗi mạng sang tiếng Việt
 │   ├── extension-test.js          # Test UI v3.0.1 (cần bridge chạy)
 │   ├── validate-manifest.js       # Kiểm tra cả 2 manifest
 │   └── load-from-root-test.js     # Kiểm tra Load unpacked từ root/extension
 └── docs/
-    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0/v3.0.1 + số liệu test
+    └── BRIDGE_V2.md               # Chẩn đoán "Bridge disconnected" + kiến trúc v2/v2.1/v3.0/v3.0.1/v3.0.2 + số liệu test
 ```
 
 ---
@@ -530,6 +560,57 @@ Extention-github-desktop/
 
 ## 13. Xử lý lỗi thường gặp
 
+### Không mở được start-windows.bat (đúp chuột không chạy / cửa sổ nháy rồi tắt) (v3.0.2)
+
+**Dấu hiệu:** đúp chuột vào `bridge\start-windows.bat` mà cửa sổ chỉ
+nháy lên rồi tắt ngay, hoặc không hiện gì cả — bridge không chạy nên
+extension báo Disconnected và không đăng nhập được.
+
+**Nguyên nhân đã kiểm chứng:** file `.bat` ở các bản trước v3.0.2 là
+UTF-8 với xuống dòng LF (không có CR) và chứa ký tự ngoài ASCII
+(em-dash) — cmd.exe trên Windows mong đợi file `.bat` có CRLF nên đọc
+sai lệnh, cửa sổ tắt trước khi kịp hiện lỗi. Từ v3.0.2 file đã viết lại
+đúng chuẩn (CRLF từng dòng, ASCII thuần, không BOM), kiểm tra từng bước
+(Node → file → cổng → chạy → đợi `/health`), ghi log ra
+`bridge\bridge-start.log` và giữ cửa sổ mở ở mọi đường thoát lỗi.
+
+**Kiểm tra theo thứ tự:**
+
+1. **Đã giải nén ZIP chưa?** Tải repo dạng ZIP thì phải giải nén ra một
+   thư mục rồi mới chạy. **Đừng** đúp chuột vào file `.bat` khi nó còn
+   nằm trong ZIP (Windows mở file trong thư mục tạm, thiếu
+   `bridge-server.js` nên tắt ngay).
+2. **Đã cài Node.js 18+ chưa?** Mở cmd, gõ `node -v` — phải thấy
+   `v18.x` trở lên. Chưa có thì cài tại <https://nodejs.org/> (bản LTS),
+   cài xong đóng hết cửa sổ cmd rồi chạy lại file `.bat`.
+3. **Windows SmartScreen chặn file tải từ internet?** Chuột phải file
+   `.bat` → **Properties** → nếu có mục **Unblock** ở dưới thì tích vào
+   → **OK**, rồi đúp chuột lại. Hoặc khi màn hình xanh SmartScreen hiện
+   lên, bấm **More info → Run anyway**.
+4. **Antivirus chặn file `.bat`?** Tạm tắt phần mềm diệt virus, hoặc
+   thêm thư mục `Extention-github-desktop` vào danh sách loại trừ, rồi
+   thử lại. Nếu vẫn bị chặn, dùng phương án 5.
+5. **Thử file PowerShell thay thế:** chuột phải
+   `bridge\start-windows.ps1` → **Run with PowerShell**. Nếu PowerShell
+   báo lỗi về ExecutionPolicy thì mở PowerShell rồi chạy:
+   `powershell -ExecutionPolicy Bypass -File .\start-windows.ps1`
+   (chạy trong thư mục `bridge`).
+6. **Chạy tay bằng cmd (luôn được):** mở cmd, gõ
+   `cd <đường-dẫn-tới-thư-mục-bridge>` rồi gõ `node bridge-server.js`.
+   Nếu hiện `Listening: http://127.0.0.1:17321` là bridge đã chạy —
+   lỗi chỉ nằm ở file `.bat`, không phải ở bridge.
+7. **Vẫn lỗi — gửi log lại:** đúp `bridge\bridge-doctor.bat` (nó kiểm
+   tra Node, file, cổng 17321, quyền ghi rồi ghi báo cáo ra
+   `bridge\bridge-doctor-report.txt`), rồi gửi 2 file
+   `bridge\bridge-start.log` và `bridge\bridge-doctor-report.txt` lại
+   để được giúp. Trên Mac/Linux dùng `bridge/bridge-doctor.sh` thay
+   thế.
+
+**Nhớ:** cửa sổ bridge **phải để mở** trong lúc dùng extension. Đóng
+cửa sổ là tắt bridge. File `.bat` v3.0.2 khi chạy đúng sẽ in
+`Bridge da chay: http://127.0.0.1:17321` + dòng `TOKEN:` — dán TOKEN đó
+vào ô Bridge token trong extension rồi mới bấm đăng nhập.
+
 ### "ERROR: Failed to fetch" khi bấm đăng nhập (v3.0.1)
 
 **Dấu hiệu:** bấm CONNECT GITHUB / Device Flow / PAT thì báo
@@ -547,7 +628,7 @@ thường vì terminal chạy bridge đã tắt, hoặc bạn chưa chạy bridg
    `Listening: http://127.0.0.1:17321`.
 2. **Kiểm tra bridge có nghe không:** mở trình duyệt, vào
    `http://127.0.0.1:17321/health` — phải thấy JSON `{"ok":true,
-   "version":"3.0.1", ...}`. Không thấy → bridge chưa chạy (hoặc sai
+   "version":"3.0.2", ...}`. Không thấy → bridge chưa chạy (hoặc sai
    cổng, xem bước 4).
 3. **Nhìn đèn trong extension:** đèn phải xanh mới bấm đăng nhập. Từ
    v3.0.1, khi bridge tắt thì các nút đăng nhập **bị mờ + hiện khung
@@ -574,7 +655,7 @@ thường vì terminal chạy bridge đã tắt, hoặc bạn chưa chạy bridg
    (mục 3).
 2. Kiểm tra bridge có đang nghe không: mở trình duyệt, vào
    `http://127.0.0.1:17321/health` — phải thấy JSON `{"ok":true,
-   "version":"3.0.1", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
+   "version":"3.0.2", ...}`. Không thấy → bridge chưa chạy (hoặc sai cổng).
 3. Nếu dùng cổng khác (biến `BRIDGE_PORT`): sửa **Bridge URL** trong popup
    cho khớp (ví dụ `http://127.0.0.1:18080`).
 4. Bấm **Reconnect** trong popup/dashboard.
@@ -710,7 +791,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 6 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 8 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -725,6 +806,7 @@ node tests/bridge-v2-test.js         # 58 checks: mock GitHub + bridge thật + 
 node tests/bridge-v21-test.js        # 107 checks: push/pull trên repo git thật + OAuth Web Flow + auto-sync
 node tests/bridge-v3-test.js         # 108 checks: chẩn đoán đăng nhập + PAT guard + zip + API v3 + git local mới
 node tests/bridge-v301-test.js       # 64 checks: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
+node tests/bridge-v302-test.js       # 82 checks: .bat CRLF/ASCII + .ps1 + doctor (chạy thật) + launcher đợi /health
 node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN bridge đang chạy ở 17321)
 ```
 
@@ -736,6 +818,7 @@ node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN b
 | `bridge-v21-test.js` | 107 passed, 0 failed | 107 passed, 0 failed |
 | `bridge-v3-test.js` | 108 passed, 0 failed | 108 passed, 0 failed |
 | `bridge-v301-test.js` | 64 passed, 0 failed | 64 passed, 0 failed |
+| `bridge-v302-test.js` | 82 passed, 0 failed | 82 passed, 0 failed |
 | `extension-test.js` | ALL CHECKS PASSED (93) | ALL CHECKS PASSED (93) |
 | `validate-manifest.js` | 18/18 | 18/18 |
 | `load-from-root-test.js` | 7/7 | 7/7 |
@@ -784,6 +867,21 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.0.2 (2026-11-23)** — Sửa triệt để lỗi không mở được
+  `start-windows.bat` (đúp chuột không chạy / cửa sổ nháy rồi tắt):
+  file `.bat` viết lại đúng chuẩn Windows (CRLF từng dòng, ASCII thuần,
+  không BOM — bản cũ là UTF-8 + LF + chứa em-dash nên cmd.exe đọc sai),
+  kiểm tra từng bước (Node.js 18+ → file `bridge-server.js` → cổng
+  17321 → chạy → đợi `/health` tối đa 10 lần), ghi log ra
+  `bridge-start.log`, mọi đường thoát lỗi đều giữ cửa sổ mở, cổng bận
+  thì kiểm tra `/health` để biết có phải bridge đã chạy sẵn không; thêm
+  `start-windows.ps1` (phương án 2 khi `.bat` bị SmartScreen/antivirus
+  chặn), `bridge-doctor.bat` / `bridge-doctor.sh` (chẩn đoán và ghi
+  `bridge-doctor-report.txt` để gửi lại khi cần giúp); hướng dẫn trong
+  dashboard nhắc tới `.ps1` và doctor; README mục 3 + mục 13 thêm
+  checklist xử lý lỗi `.bat` theo thứ tự (giải nén ZIP → cài Node →
+  Unblock/SmartScreen → thử `.ps1` → chạy tay bằng cmd → gửi log).
+  Xem `docs/BRIDGE_V2.md` (mục v3.0.2) và README mục 13.
 - **v3.0.1 (2026-11-23)** — Sửa lỗi `ERROR: Failed to fetch` khi đăng
   nhập: helper fetch tập trung `extension/bridge-client.js` (mọi lỗi mạng
   dịch thành `BRIDGE_UNREACHABLE` + thông báo tiếng Việt "Bridge chưa

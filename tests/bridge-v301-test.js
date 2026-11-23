@@ -213,7 +213,7 @@ function makeChrome(store) {
       },
     },
     runtime: {
-      getManifest: () => ({ version: '3.0.1' }),
+      getManifest: () => ({ version: '3.0.2' }),
       getURL: (p) => 'chrome-extension://test/' + p,
       id: 'test-extension-id',
       onMessage: { addListener() {} },
@@ -310,7 +310,7 @@ async function main() {
   console.log('\n[0] version');
   {
     const h = await call('GET', '/health');
-    check('health reports v3.0.1', h.version === '3.0.1', JSON.stringify(h.version));
+    check('health reports v3.0.1', h.version === '3.0.2', JSON.stringify(h.version));
   }
 
   /* ==================== 1. bridge-client: translate ==================== */
@@ -412,7 +412,7 @@ async function main() {
   {
     const ok = await call('GET', '/api/connection-test');
     check('connection-test with token -> 200 ok + v3.0.1',
-      ok.status === 200 && ok.ok === true && ok.version === '3.0.1', JSON.stringify(ok).slice(0, 160));
+      ok.status === 200 && ok.ok === true && ok.version === '3.0.2', JSON.stringify(ok).slice(0, 160));
     const noAuth = await fetch(BASE + '/api/connection-test');
     check('connection-test without token -> 401', noAuth.status === 401, 'status ' + noAuth.status);
   }
@@ -461,7 +461,7 @@ async function main() {
     bridge = startBridge(BRIDGE_PORT, dataDir, {});
     check('bridge restarts', await waitListening(bridge));
     const h = await call('GET', '/health');
-    check('after restart: /health ok again', h.ok === true && h.version === '3.0.1', JSON.stringify(h).slice(0, 120));
+    check('after restart: /health ok again', h.ok === true && h.version === '3.0.2', JSON.stringify(h).slice(0, 120));
     const tokenStill = fs.readFileSync(path.join(dataDir, '.bridge-token'), 'utf8').trim();
     check('bridge token survives restart (same data dir)', tokenStill === token);
   }
@@ -550,7 +550,7 @@ async function main() {
     check('popup boot: detail line has the start guide',
       /start-windows\.bat/.test(d.getElementById('bridgeDetail').textContent),
       d.getElementById('bridgeDetail').textContent.slice(0, 160));
-    check('popup boot: version v3.0.1', d.getElementById('version').textContent === 'v3.0.1',
+    check('popup boot: version v3.0.1', d.getElementById('version').textContent === 'v3.0.2',
       d.getElementById('version').textContent);
     try { vm.runInContext('clearInterval(pollTimer)', pop.sandbox); } catch (_) {}
   }
@@ -609,7 +609,7 @@ async function main() {
     if (started2) {
       const h2 = await fetch('http://127.0.0.1:17393/health').then((r) => r.json()).catch(() => ({}));
       check('start-mac-linux.sh bridge: /health ok, v3.0.1',
-        h2.ok === true && h2.version === '3.0.1', JSON.stringify(h2).slice(0, 120));
+        h2.ok === true && h2.version === '3.0.2', JSON.stringify(h2).slice(0, 120));
     }
     try { process.kill(-sh2.pid, 'SIGTERM'); } catch (_) { try { sh2.kill('SIGTERM'); } catch (_) {} }
     await sleep(300);
@@ -620,10 +620,10 @@ async function main() {
       /where node/.test(bat) && /Node\.js chua duoc cai dat/.test(bat), bat.slice(0, 200));
     check('start-windows.bat: pauses so the user can read errors',
       /pause/.test(bat));
-    check('start-windows.bat: version string v3.0.1',
-      /v3\.0\.1/.test(bat));
+    check('start-windows.bat: version string v3.0.2',
+      /v3\.0\.2/.test(bat));
     const shText = fs.readFileSync(path.join(ROOT, 'bridge', 'start-mac-linux.sh'), 'utf8');
-    check('start-mac-linux.sh: version string v3.0.1', /v3\.0\.1/.test(shText));
+    check('start-mac-linux.sh: version string v3.0.2', /v3\.0\.2/.test(shText));
   }
 
   /* ==================== 10. login diagnostics (bridge up) ==================== */

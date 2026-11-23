@@ -1,26 +1,26 @@
 {
-    "action": {
-        "default_popup": "extension/popup.html",
-        "default_title": "PixiJS GitHub Desktop Sync"
-    },
-    "background": {
-        "service_worker": "extension/background.js"
-    },
-    "description": "Run real Git operations on a local repository from Chrome through a secured local bridge.",
-    "host_permissions": [
-        "http://127.0.0.1/*",
-        "http://localhost/*"
-    ],
-    "manifest_version": 3,
-    "name": "PixiJS GitHub Desktop Sync",
-    "options_ui": {
-        "open_in_tab": true,
-        "page": "extension/dashboard.html"
-    },
-    "permissions": [
-        "storage",
-        "tabs",
-        "clipboardWrite"
-    ],
-    "version": "3.0.1"
+  "action": {
+    "default_popup": "extension/popup.html",
+    "default_title": "PixiJS GitHub Desktop Sync"
+  },
+  "background": {
+    "service_worker": "extension/background.js"
+  },
+  "description": "Run real Git operations on a local repository from Chrome through a secured local bridge.",
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "manifest_version": 3,
+  "name": "PixiJS GitHub Desktop Sync",
+  "options_ui": {
+    "open_in_tab": true,
+    "page": "extension/dashboard.html"
+  },
+  "permissions": [
+    "storage",
+    "tabs",
+    "clipboardWrite"
+  ],
+  "version": "3.0.2"
 }

@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.0.1
+ * PixiJS GitHub Desktop Sync — dashboard v3.0.2
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),

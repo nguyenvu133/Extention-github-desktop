@@ -4,7 +4,7 @@
 # Set BRIDGE_PORT to use another port, e.g.:
 #   BRIDGE_PORT=17322 ./start-mac-linux.sh
 cd "$(dirname "$0")"
-echo "Starting PixiJS GitHub Bridge v3.0.1 ..."
+echo "Starting PixiJS GitHub Bridge v3.0.2 ..."
 if ! command -v node >/dev/null 2>&1; then
   echo ""
   echo "[ERROR] Node.js chua duoc cai dat (Node.js is not installed)."

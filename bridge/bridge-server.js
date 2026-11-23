@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.0.1
+ * v3.0.2
  *
  * A dependency-free local bridge (Node >= 18, only built-in modules) that
  * exposes two things to the companion Chrome extension:
@@ -81,7 +81,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
 
-const VERSION = '3.0.1';
+const VERSION = '3.0.2';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);

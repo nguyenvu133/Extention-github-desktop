@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — bridge-client v3.0.1
+ * PixiJS GitHub Desktop Sync — bridge-client v3.0.2
  *
  * Shared by popup.js and dashboard.js (loaded BEFORE them in
  * popup.html / dashboard.html). Every network call to the bridge goes
@@ -40,11 +40,15 @@ const BRIDGE_START_SHORT =
   'Bridge chưa chạy — chạy bridge trước rồi bấm lại (Windows: đúp bridge/start-windows.bat; Mac/Linux: ./bridge/start-mac-linux.sh).';
 
 // Full 3-step guide for the dashboard notice + diagnostics fixes.
+// v3.0.2: step 1 also names the fallbacks when double-clicking the
+// .bat does nothing (extract the ZIP first, Unblock the file, or run
+// the .ps1 instead) and points at the doctor script.
 const BRIDGE_START_GUIDE =
   'Bridge chưa chạy — chạy bridge trước rồi bấm lại:\n' +
-  '1. Windows: đúp chuột vào bridge/start-windows.bat (trong thư mục đã tải về).\n' +
+  '1. Windows: đúp chuột vào bridge/start-windows.bat (trong thư mục đã tải về). Nếu đúp chuột không mở được: giải nén ZIP ra trước, chuột phải file → Properties → tích Unblock (nếu có), hoặc chạy bridge/start-windows.ps1 (chuột phải → Run with PowerShell).\n' +
   '2. Mac/Linux: mở Terminal, vào thư mục bridge rồi chạy ./start-mac-linux.sh.\n' +
-  '3. Đợi cửa sổ bridge hiện "Listening: http://127.0.0.1:17321" rồi bấm "Thử lại" ở đây.';
+  '3. Đợi cửa sổ bridge hiện "Listening: http://127.0.0.1:17321" rồi bấm "Thử lại" ở đây.\n' +
+  'Nếu vẫn không mở được, chạy bridge/bridge-doctor.bat (Windows) hoặc bridge/bridge-doctor.sh (Mac/Linux) rồi gửi file bridge-doctor-report.txt lại.';
 
 function isNetworkError(err) {
   if (!err) return false;

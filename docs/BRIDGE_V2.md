@@ -773,3 +773,181 @@ kill bridge thật giữa chừng, không mock fetch nông):
   script đúp chuột trên Windows thật.
 - Đăng nhập bằng tài khoản GitHub thật trên github.com thật (chỉ mock
   local) — vẫn là bước user phải tự làm (mục 7.5).
+
+## 8. v3.0.2 — Sửa lỗi không mở được start-windows.bat
+
+> Phiên bản: **3.0.2** · Ngày: 2026-11-23 · Head trước khi làm: `c9c3cf4` (v3.0.1)
+> Giữ nguyên toàn bộ tính năng v3.0.1, chỉ sửa/thêm phần chạy bridge trên Windows.
+
+### 8.1. Chẩn đoán — bằng chứng ở mức bytes, không đoán mò
+
+**Báo cáo của user:** đúp chuột vào `bridge/start-windows.bat` trên
+Windows mà không mở được (cửa sổ nháy rồi tắt hoặc không hiện gì) —
+bridge không chạy nên không đăng nhập được.
+
+Kiểm chứng bằng lệnh trên file v3.0.1:
+
+| Kiểm tra | Kết quả | Ý nghĩa |
+|---|---|---|
+| `file start-windows.bat` | `DOS batch file, Unicode text, UTF-8 text` | File là UTF-8, không phải ASCII |
+| `grep -c $'\r'` (số dòng có CR) | **0 trên 22 dòng** | File chỉ có LF, **không dòng nào có CRLF** |
+| Ký tự ngoài ASCII | dòng 2 chứa em-dash `—` | Ký tự UTF-8 ngoài ASCII |
+| BOM (3 byte đầu, `od -c`) | `@ e c h o ...` — **không BOM** | Không BOM (điểm này thì đúng) |
+
+**Kết luận: file `.bat` cũ vi phạm đúng 2 quy tắc của cmd.exe trên
+Windows — cmd.exe mong đợi file `.bat` có CRLF từng dòng, và file
+chứa ký tự UTF-8 ngoài ASCII có thể khiến cmd.exe đọc sai lệnh.**
+Hậu quả đúng như user mô tả: cửa sổ nháy rồi tắt, không kịp hiện lỗi
+(vì bản thân lệnh `pause`/`echo` lỗi cũng nằm trong file bị đọc sai).
+Các nguyên nhân khác cũng được xử lý (không chỉ sửa 1 cái):
+
+| # | Nguyên nhân khác | Xử lý trong v3.0.2 |
+|---|---|---|
+| (a) | Máy user chưa cài Node.js | `.bat`/`.ps1` kiểm tra `where node` + phiên bản ≥ 18, báo rõ + `pause` |
+| (b) | Windows SmartScreen chặn file `.bat` tải từ internet (Mark of the Web) | README hướng dẫn Unblock (Properties) / More info → Run anyway + `.ps1` thay thế |
+| (c) | User chưa giải nén ZIP đã đúp chuột vào file trong ZIP | `.bat` kiểm tra `bridge-server.js` có tồn tại không → báo "giai nen day du" + `pause`; README checklist bước 1 |
+| (d) | Antivirus chặn `.bat` | README hướng dẫn thêm thư mục vào loại trừ + `.ps1` thay thế |
+| (e) | Cổng 17321 đã có bridge khác chiếm | `.bat`/`.ps1` kiểm tra cổng bằng `netstat` (`.bat`) / TCP connect (`.ps1`); nếu cổng bận thì thử `/health` — đúng bridge thì báo "dung luon", sai thì báo rõ |
+
+### 8.2. Sửa trong v3.0.2
+
+- **`bridge/start-windows.bat` — viết lại từ đầu:**
+  **CRLF từng dòng, ASCII thuần 100%, không BOM** (kiểm chứng:
+  `file` → `DOS batch file, ASCII text, with CRLF line terminators`).
+  Luồng tuyến tính bằng `goto` (không lồng khối `if (...)` để tránh
+  lỗi parse của cmd): `cd` đúng thư mục script → kiểm tra Node
+  (`where node`, `node -v`, major ≥ 18) → kiểm tra
+  `bridge-server.js` → kiểm tra cổng bằng `netstat` (+ thử `/health`
+  khi cổng bận) → chạy bridge nền bằng
+  `start /b cmd /c "node bridge-server.js >> bridge-start.log 2>&1"`
+  (output của bridge ghi thêm vào log, không ghi đè) → đợi `/health`
+  tối đa 10 lần (curl, fallback PowerShell `Invoke-WebRequest`) →
+  in `Bridge da chay` + dòng `TOKEN:` (đọc từ log) + hướng dẫn dán
+  token → `pause` giữ cửa sổ mở. **Mọi đường thoát lỗi đều `pause`**
+  (cửa sổ không bao giờ tự đóng). Mọi dòng log ghi ra
+  `bridge-start.log` (console + file, qua subroutine `:log`; dùng
+  `echo %~1 >> log` có khoảng trắng trước `>>` để tránh lỗi cmd ăn
+  mất chữ số cuối dòng — ví dụ `17321`).
+- **Mới `bridge/start-windows.ps1`** (UTF-8 có BOM, ASCII thuần sau
+  BOM): cùng 5 bước như `.bat` (kiểm tra Node/phiên bản/file/cổng/
+  `/health`, log ra `bridge-start.log`, `Read-Host` giữ cửa sổ mở),
+  chạy bằng chuột phải → Run with PowerShell hoặc
+  `powershell -ExecutionPolicy Bypass -File .\start-windows.ps1`
+  (README ghi rõ cách Bypass khi ExecutionPolicy chặn). Kiểm tra cổng
+  bằng TCP connect trực tiếp thay vì `netstat`.
+- **Mới `bridge/bridge-doctor.bat`** (CRLF + ASCII) **và
+  `bridge/bridge-doctor.sh`**: kiểm tra và in báo cáo — Node có
+  không + phiên bản, file `bridge-server.js`, file launcher, cổng
+  17321 (netstat + `/health`), quyền ghi thư mục, danh sách file —
+  ghi báo cáo ra `bridge-doctor-report.txt` (user gửi file này lại
+  khi vẫn lỗi). Cả hai đều tôn trọng biến `BRIDGE_PORT` (mặc định
+  17321). `.sh` đã chạy thật trên Linux và sinh report đúng định
+  dạng (xem 8.4).
+- **Extension:** `BRIDGE_START_GUIDE` trong
+  `extension/bridge-client.js` (hiện trong khung "Bridge chưa chạy"
+  của dashboard + popup) nay nhắc thêm phương án dự phòng: giải nén
+  ZIP trước, Unblock file, chạy `start-windows.ps1`, chạy doctor và
+  gửi `bridge-doctor-report.txt`. Kiểm tra lại: thông báo đã nhắc
+  đúng tên file `start-windows.bat` từ v3.0.1.
+- **`bridge/start-mac-linux.sh`:** chỉ đổi chuỗi phiên bản in ra
+  thành v3.0.2 (giữ nguyên logic — `.sh` dùng LF là đúng cho sh).
+- **`.gitignore`:** thêm `bridge/bridge-doctor-report.txt` và
+  `bridge/doctor-write-test.tmp` (`bridge-start.log` đã khớp `*.log`).
+- **Version:** 3.0.2 ở cả 2 `manifest.json` + `bridge/package.json`
+  (thêm script `test:v302`) + header bridge/dashboard/popup/
+  bridge-client + chuỗi phiên bản trong `.bat`/`.ps1`/`.sh`/doctor.
+  Các test cũ đổi assertion phiên bản `3.0.1` → `3.0.2` (cùng cách
+  các vòng trước làm).
+
+### 8.3. File đã sửa / tạo (v3.0.2)
+
+- Sửa: `bridge/start-windows.bat` (viết lại), `bridge/start-mac-linux.sh`
+  (chuỗi phiên bản), `extension/bridge-client.js` (hướng dẫn + header),
+  `extension/dashboard.js` + `extension/popup.js` (header),
+  `bridge/bridge-server.js` (VERSION + header), `manifest.json`,
+  `extension/manifest.json`, `bridge/package.json`,
+  `.gitignore`, `tests/bridge-v2-test.js`, `tests/bridge-v21-test.js`,
+  `tests/bridge-v3-test.js`, `tests/bridge-v301-test.js`,
+  `tests/extension-test.js` (assertion phiên bản → 3.0.2),
+  `tests/run-all.js` (thêm suite v3.0.2 — 8 suite),
+  `README.md`, `docs/BRIDGE_V2.md`.
+- Mới: `bridge/start-windows.ps1`, `bridge/bridge-doctor.bat`,
+  `bridge/bridge-doctor.sh`, `tests/bridge-v302-test.js`.
+
+### 8.4. Kiểm thử v3.0.2 — số liệu từng vòng
+
+`tests/bridge-v302-test.js` (node, bridge thật cổng 17394 + mock
+GitHub cổng 17403 + cổng chết 17498, **không gọi api.github.com
+thật**; **không chạy được cmd.exe trên Linux** nên file `.bat` chỉ
+kiểm tra bằng bytes + cấu trúc — giới hạn này ghi rõ trong file test
+và ở đây):
+
+- `.bat`: đọc bytes — CRLF từng dòng, ASCII 100%, không BOM, chứa
+  `where node` + kiểm tra major `LSS 18` + kiểm tra
+  `bridge-server.js` + `netstat` + `bridge-start.log` + `pause` +
+  `/health` + `v3.0.2`.
+- `.ps1`: có BOM UTF-8, ASCII sau BOM, ngoặc `{` `}` cân bằng, chứa
+  kiểm tra Node/phiên bản/cổng/`/health`/`bridge-start.log`.
+- `bridge-doctor.bat`: CRLF + ASCII + chứa `bridge-doctor-report.txt`.
+- `bridge-doctor.sh`: chạy thật (bản sao trong thư mục tạm) —
+  sinh `bridge-doctor-report.txt` đúng 6 mục; với bridge thật chạy
+  ở cổng test thì mục cổng báo `/health` OK, với cổng chết thì báo
+  không trả lời.
+- `start-mac-linux.sh`: chạy thật bản sao trong thư mục tạm —
+  bridge khởi động, `/health` 200 + version 3.0.2.
+- Bridge thật (`node bridge-server.js` cổng test): `/health` 200 +
+  version 3.0.2 và `/api/connection-test` 200 — chứng minh bản thân
+  bridge chạy tốt, lỗi chỉ nằm ở file chạy.
+- README có đủ từ khoá xử lý lỗi `.bat`: giải nén, Node.js,
+  SmartScreen/Unblock, chạy tay, `bridge-doctor`,
+  `bridge-start.log`, `start-windows.ps1`.
+- `BRIDGE_START_GUIDE` nhắc tới `start-windows.ps1` và
+  `bridge-doctor`; `.gitignore` có `bridge-doctor-report.txt`.
+
+**Kết quả:** `node tests/bridge-v302-test.js` → **82 passed,
+0 failed** (lần đầu 78/82 — 4 lỗi ở mục README là do harness tự
+lowercase README rồi so regex có chữ hoa; sửa harness, chạy lại
+82/82, không phải lỗi README). Các suite cũ trong cùng vòng
+`run-all.js` — xem 8.7.
+
+### 8.7. Toàn bộ suite — vòng chạy `run-all.js`
+
+`node tests/run-all.js` chạy **2 vòng, cả 2 vòng đều ALL SUITES
+PASSED** (8 suite, số liệu giống hệt nhau cả 2 vòng):
+
+- validate-manifest: all checks passed (18/18)
+- load-from-root: all checks passed (7/7)
+- bridge-v2: 58 passed, 0 failed
+- bridge-v21: 107 passed, 0 failed
+- bridge-v3: 108 passed, 0 failed
+- bridge-v301: 64 passed, 0 failed
+- **bridge-v302: 82 passed, 0 failed**
+- extension-test: ALL CHECKS PASSED (93 checks)
+
+Không có suite nào lỗi trong cả 2 vòng; không còn listener/process
+sót sau khi chạy.
+
+### 8.5. User cần làm trên máy Windows của mình
+
+1. **Tải code v3.0.2 mới nhất** về, **giải nén ZIP ra một thư mục**
+   (đừng chạy file khi còn trong ZIP).
+2. Vào thư mục `bridge`, đúp chuột **`start-windows.bat`** — lần này
+   cửa sổ sẽ ở lại và in từng bước kiểm tra (Node → file → cổng →
+   chạy → đợi `/health`).
+3. Khi thấy `Bridge da chay: http://127.0.0.1:17321` + dòng `TOKEN:`:
+   mở extension, dán TOKEN vào ô Bridge token (nếu chưa dán), đợi
+   đèn xanh, rồi bấm **CONNECT GITHUB** và đăng nhập trên
+   github.com bằng tài khoản `nguyenvu16592b@gmail.com`.
+4. Nếu đúp chuột vẫn không mở được: thử theo thứ tự trong README
+   mục 13 (Unblock → `.ps1` → chạy tay bằng cmd → chạy
+   `bridge-doctor.bat` rồi gửi 2 file `bridge-start.log` và
+   `bridge-doctor-report.txt` lại).
+
+### 8.6. Chưa kiểm chứng bằng tay
+
+- File `.bat`/`.ps1`/`.bat` doctor **chưa chạy được trên Windows
+  thật** — trên Linux chỉ kiểm tra được bytes + cấu trúc (không có
+  cmd.exe). Cần user đúp chuột thử trên Windows thật và báo lại
+  (kèm `bridge-start.log` nếu vẫn lỗi).
+- Đăng nhập bằng tài khoản GitHub thật trên github.com thật — vẫn
+  là bước user phải tự làm (mục 8.5).

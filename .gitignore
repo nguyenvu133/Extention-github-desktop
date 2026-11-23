@@ -15,6 +15,10 @@ node_modules/
 *.log
 npm-debug.log*
 
+# Bridge doctor report (local diagnostics, may contain local paths)
+bridge/bridge-doctor-report.txt
+bridge/doctor-write-test.tmp
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
