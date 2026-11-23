@@ -1,9 +1,22 @@
 <!doctype html>
-<html lang="vi">
+<html lang="vi" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PixiJS Engine × GitHub</title>
+<script>
+// v3.5.0: apply the stored theme before first paint (as far as the
+// load order allows). chrome.storage is async; the dashboard.js boot
+// re-applies it once the page is ready. Default = light.
+try {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(['theme'], function (s) {
+      var t = (s && s.theme) || 'light';
+      document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+    });
+  }
+} catch (e) { /* non-extension context — keep the default light theme */ }
+</script>
 <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
@@ -11,7 +24,7 @@
 <header class="gh-header">
   <div class="brand">
     <div class="mark">P</div>
-    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.1.1</small></div>
+    <div><b>PIXIJS ENGINE × GITHUB</b><small>DESKTOP SYNC · v3.5.0</small></div>
   </div>
 
   <div class="gh-search">
@@ -21,9 +34,13 @@
   <nav class="gh-nav">
     <button id="navRepos" class="active">Repositories</button>
     <button id="navLocal">Local Git</button>
+    <button id="navActions">Actions</button>
     <button id="navProfile">Hồ sơ</button>
     <button id="navSettings">Cài đặt</button>
   </nav>
+
+  <button id="paletteBtn" class="mini palette-btn" title="Mở bảng lệnh (Ctrl+K)">⌘K / Ctrl+K</button>
+  <button id="themeToggleBtn" class="mini theme-toggle-btn" title="Đổi giao diện sáng / tối">🌙</button>
 
   <div class="notif-wrap">
     <button id="notifBtn" class="mini notif-btn" title="Thông báo GitHub">🔔 <span id="notifBadge" class="badge hidden"></span></button>
@@ -106,6 +123,24 @@
       <div class="row"><h3>KIỂM TRA KẾT NỐI</h3><button id="connDiagBtn" class="mini">Kiểm tra kết nối</button></div>
       <p id="connDiagStatus" class="hint">Bấm "Kiểm tra kết nối" để xem từng bước: bridge có trả lời không, đúng cổng 17321 không, CORS có qua không, /health và /oauth/status ra sao — bước nào hỏng sẽ hiện cách sửa.</p>
       <div id="connDiagList"></div>
+    </div>
+
+    <!-- v3.5.0: real-login check — diagnostics + /user + /user/emails.
+         Never asks for or shows any password / token / secret. -->
+    <div class="diag-box">
+      <div class="row"><h3>KIỂM TRA ĐĂNG NHẬP THẬT</h3><button id="realLoginBtn" class="mini">Kiểm tra đăng nhập thật</button></div>
+      <p id="realLoginStatus" class="hint">Bấm nút để kiểm tra tài khoản GitHub đang đăng nhập thật sự là ai: tên đăng nhập, avatar và email chính — đối chiếu với email nguyenvu16592b@gmail.com.</p>
+      <div id="realLoginResult" class="hidden">
+        <div class="profile-card">
+          <img id="realLoginAvatar" class="profile-avatar" alt="" src="">
+          <div>
+            <h2 id="realLoginName">—</h2>
+            <p id="realLoginEmail" class="hint">—</p>
+          </div>
+        </div>
+        <p id="realLoginWarning" class="pat-warning hidden"></p>
+        <p id="realLoginOk" class="hint hidden">✓ Đúng tài khoản nguyenvu16592b@gmail.com.</p>
+      </div>
     </div>
 
     <!-- Cách 1: OAuth Web Flow -->
@@ -322,8 +357,16 @@
         </div>
         <div id="codeSearchResults" class="hidden"></div>
         <div id="fileTree" class="empty">Select a repository to browse its files.</div>
+        <div id="fileReadmeWrap" class="hidden">
+          <div class="row"><h3>README</h3><span id="fileReadmeName" class="hint"></span></div>
+          <div id="fileReadmeRendered" class="md-rendered"></div>
+        </div>
         <div id="fileViewerWrap" class="hidden">
           <div class="row"><h3 id="fileViewerName">—</h3><span id="fileViewerMeta" class="hint"></span></div>
+          <div class="row-actions sync-actions">
+            <button id="fileBlameBtn" class="mini" title="Xem ai sửa từng dòng (git blame)">Blame</button>
+            <button id="fileHistoryBtn" class="mini" title="Xem lịch sử của file này">Lịch sử file</button>
+          </div>
           <pre id="fileViewer">Select a file to view it.</pre>
           <div id="fileEditWrap" class="hidden">
             <label for="fileEditArea">Sửa file (lưu sẽ commit lên branch đang chọn)</label>
@@ -333,6 +376,14 @@
               <button id="fileDeleteBtn" class="danger">Xóa file</button>
             </div>
           </div>
+        </div>
+        <div id="blameView" class="hidden">
+          <div class="row"><h3 id="blameFileName">—</h3><button id="blameBackBtn" class="mini">← Quay lại file</button></div>
+          <pre id="blameContent">Chưa tải blame.</pre>
+        </div>
+        <div id="fileHistoryView" class="hidden">
+          <div class="row"><h3 id="fileHistoryName">—</h3><button id="fileHistoryBackBtn" class="mini">← Quay lại file</button></div>
+          <div id="fileHistoryList" class="empty">Chưa tải lịch sử.</div>
         </div>
         <div class="divider"><span>tạo file / tải file lên</span></div>
         <label for="newFileName">Tạo file mới (tại thư mục đang mở)</label>
@@ -346,6 +397,25 @@
       <div id="tab-commits" class="tabpane hidden">
         <div class="row"><h3>RECENT COMMITS</h3><button id="reloadCommits" class="mini">Refresh</button></div>
         <div id="commitList" class="empty">No commits loaded.</div>
+        <div id="commitDetail" class="hidden">
+          <div class="row">
+            <h3 id="commitDetailTitle">—</h3>
+            <button id="commitDetailBackBtn" class="mini">← Danh sách commit</button>
+          </div>
+          <p id="commitDetailMeta" class="hint"></p>
+          <p id="commitDetailStats" class="hint"></p>
+          <h3>FILE THAY ĐỔI</h3>
+          <div id="commitDetailFiles" class="empty">Chưa tải file thay đổi.</div>
+        </div>
+        <div class="divider"><span>so sánh 2 branch / commit</span></div>
+        <div class="sync-grid">
+          <label for="compareBase">Base</label>
+          <input id="compareBase" placeholder="main" spellcheck="false">
+          <label for="compareHead">Head</label>
+          <input id="compareHead" placeholder="feature/my-change" spellcheck="false">
+        </div>
+        <button id="compareBtn" class="full">SO SÁNH</button>
+        <div id="compareResult" class="empty hidden">Chưa so sánh.</div>
       </div>
 
       <div id="tab-branches" class="tabpane hidden">
@@ -395,6 +465,18 @@
           </div>
         </div>
         <div id="pullList" class="empty">No pull requests loaded.</div>
+        <div id="prDetail" class="hidden">
+          <div class="row">
+            <h3 id="prDetailTitle">—</h3>
+            <button id="prDetailBackBtn" class="mini">← Danh sách PR</button>
+          </div>
+          <p id="prDetailMeta" class="hint"></p>
+          <pre id="prDetailBody" class="readme">(No description)</pre>
+          <h3>FILE THAY ĐỔI</h3>
+          <div id="prDetailFiles" class="empty">Chưa tải file thay đổi.</div>
+          <h3>REVIEWS</h3>
+          <div id="prDetailReviews" class="empty">Chưa tải reviews.</div>
+        </div>
         <div class="divider"><span>tạo pull request mới</span></div>
         <label for="prTitle">Tiêu đề PR</label>
         <input id="prTitle" placeholder="Add feature…" spellcheck="false">
@@ -422,6 +504,47 @@
         <label class="check-row"><input type="checkbox" id="releaseDraft"> Draft (bản nháp)</label>
         <label class="check-row"><input type="checkbox" id="releasePrerelease"> Pre-release</label>
         <button id="createReleaseBtn" class="blue full">TẠO RELEASE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ACTIONS (v3.5.0) ============ -->
+  <div id="view-actions" class="view hidden">
+    <div class="panel">
+      <div class="row">
+        <h2>GITHUB ACTIONS</h2>
+        <div class="row-actions">
+          <select id="actionsWorkflowSelect" title="Lọc theo workflow"><option value="">Tất cả workflow</option></select>
+          <select id="actionsStatusSelect" title="Lọc theo trạng thái">
+            <option value="">Mọi trạng thái</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+            <option value="in_progress">In progress</option>
+            <option value="pending">Pending</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button id="actionsRefreshBtn" class="mini">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Chọn repo trong danh sách Repositories trước (hoặc repo local đang mở) rồi xem các lần chạy workflow ở đây.</p>
+      <div id="actionsRunsList" class="empty">Mở một repository để xem các lần chạy Actions.</div>
+      <div id="actionsRunDetail" class="hidden">
+        <div class="row">
+          <h3 id="actionsRunTitle">—</h3>
+          <button id="actionsBackBtn" class="mini">← Danh sách runs</button>
+        </div>
+        <p id="actionsRunMeta" class="hint"></p>
+        <div class="row-actions sync-actions">
+          <button id="actionsRerunBtn" class="blue">↻ Rerun</button>
+          <button id="actionsCancelBtn" class="danger">✕ Cancel</button>
+          <button id="actionsLogBtn">Xem log</button>
+        </div>
+        <h3>JOBS</h3>
+        <div id="actionsJobsList" class="empty">Chưa tải jobs.</div>
+        <div id="actionsLogWrap" class="hidden">
+          <h3>LOG</h3>
+          <pre id="actionsLogPre">Chưa tải log.</pre>
+        </div>
       </div>
     </div>
   </div>
@@ -465,6 +588,11 @@
       <input id="settingsDefaultBranch" placeholder="main — để trống = nhánh mặc định của repo" spellcheck="false">
       <label class="check-row"><input type="checkbox" id="settingsAutoSync"> Bật auto-sync (tự pull khi repo có commit mới)</label>
       <label class="check-row"><input type="checkbox" id="settingsNotifications" checked> Bật thông báo (hiện badge số chưa đọc trên chuông)</label>
+      <label for="themeSetting">Giao diện</label>
+      <select id="themeSetting">
+        <option value="light">Sáng (mặc định)</option>
+        <option value="dark">Tối (GitHub Primer dark)</option>
+      </select>
       <button id="saveSettingsBtn" class="blue full">LƯU CÀI ĐẶT</button>
       <p id="settingsStatus" class="hint"></p>
     </div>
@@ -570,6 +698,32 @@
       <div id="syncSteps" class="hint">Sync runs fetch → pull → push and reports each step here.</div>
       <div id="pullPushResult" class="pp-result hidden"></div>
       <p class="hint">If a pull or merge conflicts, resolve it in the Merge &amp; Conflicts panel below. Khi rebase, nút <b>Ours</b> vẫn luôn là <b>bản của bạn</b>.</p>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <h2>PULL ORIGIN</h2>
+        <button id="pullOriginRefreshBtn" class="mini">Refresh</button>
+      </div>
+      <p id="pullOriginUpstream" class="hint">Chưa có upstream.</p>
+      <div class="sync-grid">
+        <label for="pullOriginRemote">Remote</label>
+        <select id="pullOriginRemote"><option value="origin">origin</option></select>
+        <label for="pullOriginBranch">Branch</label>
+        <select id="pullOriginBranch"><option value="">— branch hiện tại —</option></select>
+        <label for="pullOriginMode">Chế độ pull</label>
+        <select id="pullOriginMode">
+          <option value="merge" selected>Merge</option>
+          <option value="rebase">Rebase</option>
+          <option value="ff-only">Chỉ fast-forward</option>
+        </select>
+      </div>
+      <label class="check-row"><input type="checkbox" id="pullOriginAutostash" checked> Autostash — tự cất thay đổi chưa commit trước khi pull rồi trả lại (<code>--autostash</code>)</label>
+      <div class="row-actions sync-actions">
+        <button id="pullOriginBtn" class="blue">Pull</button>
+        <button id="pullOriginAllBtn" title="Pull từ tất cả remote (POST /api/git/pull/remotes)">Pull tất cả remote</button>
+      </div>
+      <div id="pullOriginResults" class="pp-result hidden"></div>
     </div>
 
     <div class="panel">
@@ -750,6 +904,18 @@
 
 </section>
 </main>
+
+<!-- v3.5.0: command palette (Ctrl+K) -->
+<div id="paletteOverlay" class="palette-overlay hidden">
+  <div class="palette-box" role="dialog" aria-label="Bảng lệnh">
+    <div class="palette-head">
+      <input id="paletteInput" type="search" placeholder="Gõ lệnh… (đi tới tab, mở repo, issue #n, PR #n, Fetch / Pull / Push)" spellcheck="false" autocomplete="off">
+      <button id="paletteCloseBtn" class="mini" title="Đóng (Esc)">✕</button>
+    </div>
+    <div id="paletteList" class="palette-list"></div>
+    <p class="hint palette-hint">↑ ↓ để chọn · Enter để chạy · Esc để đóng · chạm để chọn.</p>
+  </div>
+</div>
 
 <script src="bridge-client.js"></script>
 <script src="dashboard.js"></script>

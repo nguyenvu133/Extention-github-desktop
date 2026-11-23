@@ -1,6 +1,6 @@
 @echo off
 REM PixiJS GitHub Desktop Sync - bridge launcher (Windows)
-REM v3.1.1 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
+REM v3.5.0 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
 REM a UTF-8 / LF-only .bat can be misparsed, so the window flashes
 REM and closes without showing the error. Keep this file ASCII + CRLF.
 setlocal EnableDelayedExpansion
@@ -8,7 +8,7 @@ title PixiJS GitHub Bridge
 cd /d "%~dp0"
 if not defined BRIDGE_PORT set BRIDGE_PORT=17321
 set LOG=bridge-start.log
-call :log "=== PixiJS GitHub Bridge v3.1.1 ==="
+call :log "=== PixiJS GitHub Bridge v3.5.0 ==="
 call :log "Thu muc bridge: %CD%"
 call :log "Cong: %BRIDGE_PORT%"
 call :logblank
@@ -61,6 +61,7 @@ call :log "Giu cua so nay mo trong luc dung extension. Dong cua so se tat bridge
 call :logblank
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 0
 
 :port_busy
@@ -75,6 +76,7 @@ call :log "  start-windows.bat"
 call :log "Xem chi tiet trong bridge-start.log"
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :already_running
@@ -83,6 +85,7 @@ call :log "Mo extension len, den phai chuyen xanh."
 call :logblank
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 0
 
 :err_no_node
@@ -94,6 +97,7 @@ call :log "Kiem tra: mo cmd roi go: node -v"
 call :log "Xem chi tiet trong bridge-start.log"
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :err_node_ver
@@ -102,6 +106,7 @@ call :log "[LOI] Khong doc duoc phien ban Node.js (node -v khong tra ve ket qua)
 call :log "Cai lai Node.js 16.13 tro len tai https://nodejs.org/ roi chay lai file nay."
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :err_node_old
@@ -111,6 +116,7 @@ call :log "Cach sua: cai Node.js 16.13 tro len tai https://nodejs.org/"
 call :log "Sau khi cai xong, dong cua so nay va chay lai start-windows.bat"
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :err_no_file
@@ -122,6 +128,7 @@ call :log "  bridge\start-windows.bat"
 call :log "Xem chi tiet trong bridge-start.log"
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :err_health
@@ -131,6 +138,7 @@ call :log "Mo file bridge-start.log xem loi cuoi cung, roi gui file do lai de du
 call :log "Co the do cong %BRIDGE_PORT% bi chuong trinh khac chiem, hoac Node.js loi."
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
+endlocal
 exit /b 1
 
 :tryhealth

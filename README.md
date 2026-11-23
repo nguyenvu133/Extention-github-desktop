@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.1.1
+# PixiJS GitHub Desktop Sync — v3.5.0
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -315,6 +315,17 @@ Bấm avatar/tên đăng nhập ở header → **Sign out**. Token bị xoá kh�
 config trên máy và khỏi bộ nhớ bridge ngay lập tức; danh sách repo biến mất
 cho tới khi đăng nhập lại.
 
+### Kiểm tra đăng nhập thật (v3.5.0)
+
+Trong khung đăng nhập có panel **"Kiểm tra đăng nhập thật"**: bấm nút để
+bridge chạy kiểm tra đăng nhập + `GET /user` + `GET /user/emails` rồi hiện
+tên đăng nhập, avatar và **email chính** của tài khoản GitHub đang đăng
+nhập. Nếu email chính **không phải `nguyenvu16592b@gmail.com`** thì panel
+hiện cảnh báo rõ — bạn đang đăng nhập nhầm tài khoản, hãy đăng xuất rồi
+đăng nhập lại bằng đúng tài khoản đó. Panel này **không bao giờ** hỏi hay
+hiện mật khẩu / token / Client Secret. Lưu ý: bước đồng ý trên github.com
+vẫn phải do chính bạn bấm trong trình duyệt — bridge không thể bấm thay bạn.
+
 ### Token hết hạn thì sao?
 
 - Classic token hết hạn → GitHub trả 401 → dashboard báo "GitHub token
@@ -364,6 +375,27 @@ Dashboard có 2 tab: **Repositories** (GitHub) và **Local Git** (máy bạn).
 - **Issues:** issue đang mở (tiêu đề, số, người tạo, labels).
 - **Pulls:** pull request đang mở.
 - Nút **← Back to repositories** để về danh sách.
+
+### Trang repo giống github.com hơn nữa (v3.5.0)
+
+- **Tab Actions:** danh sách workflow + các lần chạy (run) với huy hiệu
+  trạng thái giống GitHub (xanh lá = thành công, đỏ = thất bại, vàng =
+  đang chạy/chờ, xám = đã huỷ/bỏ qua). Bấm vào một run để xem jobs, nút
+  **Rerun** / **Cancel** và **Xem log** (log bị cắt ở ~200 KB).
+- **Trang commit:** bấm vào một commit trong danh sách Commits để xem
+  message đầy đủ, tác giả, thống kê +/- và từng file đã đổi.
+- **Blame:** trong trang xem file, bấm **Blame** để xem từng dòng do ai
+  viết, ngày nào. **Lịch sử file:** xem các commit đã chạm vào file đó.
+- **Compare:** nhập `base...head` (ví dụ `main...feature-x`) để xem repo
+  hơn/kém nhau bao nhiêu commit và những file nào đã đổi.
+- **Trang Issue / Pull Request:** bấm vào issue/PR để xem nội dung đầy đủ,
+  bình luận, file đã đổi và review của PR; có thể viết bình luận mới ngay
+  trong dashboard.
+- **Command palette:** bấm **Ctrl+K** (hoặc nút `⌘K / Ctrl+K` ở header) để
+  nhảy nhanh tới tab, repo, issue/PR theo số, hoặc chạy Fetch/Pull/Push.
+- **Giao diện tối:** nút mặt trăng/mặt trời ở header hoặc mục "Giao diện"
+  trong Cài đặt — kiểu GitHub Primer dark (`#0d1117`), lựa chọn được lưu
+  lại, mở lại vẫn giữ nguyên.
 
 ### Tạo / sửa file trong repo (cơ bản)
 
@@ -520,6 +552,25 @@ Popup (bấm icon extension) cũng có Fetch Origin / Pull / Push với cùng m�
 - Lỗi được phân loại kèm gợi ý tiếng Việt (chưa đăng nhập, non-fast-forward, conflict, mạng, quyền…).
 - Sync có thể chỉ pull (`pushAfter=false`) và bỏ qua push khi không có gì để đẩy.
 
+### Pull Origin mở rộng (v3.5.0)
+
+Panel **Pull Origin** trong tab Local Git:
+
+- **Chọn remote rõ ràng:** origin / upstream / bất kỳ remote nào của repo
+  (lấy từ `GET /api/git/remotes`) — không còn mặc định ngầm là origin.
+- **Chọn branch** sẽ pull, **chế độ** merge / rebase / chỉ fast-forward,
+  và bật/tắt **autostash** (tự cất thay đổi chưa commit rồi trả lại sau pull).
+- **Pull tất cả remote** (`POST /api/git/pull/remotes`): pull lần lượt từng
+  remote, mỗi remote báo kết quả riêng; remote nào lỗi thì các remote sau
+  vẫn chạy tiếp (trừ khi đang kẹt merge conflict).
+- **Dòng upstream** (`GET /api/git/upstream`): hiện `Upstream:
+  origin/main • ahead 0 behind 2`, hoặc "Chưa có upstream" nếu branch chưa
+  gắn với remote nào.
+- **Worktrees** (`GET /api/git/worktrees`, `POST /api/git/worktree/add|remove`):
+  tạo/xoá worktree để làm nhiều branch cùng lúc mà không cần clone lại.
+- **Sơ đồ commit** (`GET /api/git/graph`): `git log --graph --all` tối đa
+  200 dòng.
+
 ---
 
 ## 10. Popup nhanh
@@ -651,6 +702,14 @@ sai lệnh, cửa sổ tắt trước khi kịp hiện lỗi. Từ v3.0.2 file �
 cửa sổ là tắt bridge. File `.bat` v3.0.2 khi chạy đúng sẽ in
 `Bridge da chay: http://127.0.0.1:17321` + dòng `TOKEN:` — dán TOKEN đó
 vào ô Bridge token trong extension rồi mới bấm đăng nhập.
+
+**Giới hạn kiểm thử nói thật (v3.5.0):** `cmd.exe` không chạy được trên
+Linux nên các file `.bat` ở đây **không được chạy thử trên Windows thật**
+— chúng được kiểm chứng bằng byte + cấu trúc trong `tests/bat-test.js`
+(105 checks: CRLF từng dòng, ASCII thuần, không BOM, label/goto đúng,
+`setlocal`/`endlocal` cân bằng, mọi `exit /b 1` đều có `pause` trước).
+Bước cuối cùng vẫn cần bạn: đúp chuột vào `start-windows.bat` trên máy
+Windows thật và xem nó in ra "Bridge da chay" hay không.
 
 ### "ERROR: Failed to fetch" khi bấm đăng nhập (v3.0.1)
 
@@ -832,7 +891,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 8 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 12 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -848,10 +907,14 @@ node tests/bridge-v21-test.js        # 107 checks: push/pull trên repo git th�
 node tests/bridge-v3-test.js         # 108 checks: chẩn đoán đăng nhập + PAT guard + zip + API v3 + git local mới
 node tests/bridge-v301-test.js       # 64 checks: fix "Failed to fetch" (bridge tắt thật + CORS + login gate + start script)
 node tests/bridge-v302-test.js       # 82 checks: .bat CRLF/ASCII + .ps1 + doctor (chạy thật) + launcher đợi /health
+node tests/bridge-v310-test.js       # 55 checks: pull/push mở rộng (preview, autostash, undo, rebase, all-branches)
+node tests/bridge-v311-test.js       # toolbar luôn hiện (recent/find repo, fetch từng remote, clone, publish branch)
+node tests/bridge-v350-test.js       # pull origin trên git thật + mock-OAuth end-to-end + Actions/repo pages/worktrees
+node tests/bat-test.js               # 105 checks: .bat/.ps1/.sh theo byte + cấu trúc (không cần Windows)
 node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN bridge đang chạy ở 17321)
 ```
 
-### Kết quả đã chạy (2026-11-23, 2 vòng liên tiếp — xem chi tiết trong `docs/BRIDGE_V2.md`)
+### Kết quả đã chạy v3.5.0 (2026-11-23, 2 vòng liên tiếp — xem chi tiết trong `docs/BRIDGE_V2.md`)
 
 | Suite | Vòng 1 | Vòng 2 |
 |---|---|---|
@@ -860,9 +923,23 @@ node tests/extension-test.js         # 93 checks: Git local + UI v3.0.1 (CẦN b
 | `bridge-v3-test.js` | 108 passed, 0 failed | 108 passed, 0 failed |
 | `bridge-v301-test.js` | 64 passed, 0 failed | 64 passed, 0 failed |
 | `bridge-v302-test.js` | 82 passed, 0 failed | 82 passed, 0 failed |
+| `bridge-v310-test.js` | 55 passed, 0 failed | 55 passed, 0 failed |
+| `bridge-v311-test.js` | 27 passed, 0 failed | 27 passed, 0 failed |
+| `bridge-v350-test.js` | 70 passed, 0 failed | 70 passed, 0 failed |
+| `bat-test.js` | 105 passed, 0 failed | 105 passed, 0 failed |
 | `extension-test.js` | ALL CHECKS PASSED (93) | ALL CHECKS PASSED (93) |
 | `validate-manifest.js` | 18/18 | 18/18 |
 | `load-from-root-test.js` | 7/7 | 7/7 |
+
+`bridge-v350-test.js` kiểm tra bằng repo git thật (bare origin + bare
+upstream + 2 clone): pull origin main/branch, pull với autostash trên cây
+đang bẩn, pull --rebase gặp conflict rồi resolve, pull tất cả remote,
+undo pull, upstream; mock-OAuth end-to-end (start → callback → đổi code
+lấy token → `/me` + `/user/emails` với email chính
+`nguyenvu16592b@gmail.com`); các route mới Actions, commit detail,
+compare, languages/contributors/topics, issue/PR detail, worktrees,
+graph, blame, file history. `bat-test.js` kiểm tra `.bat`/`.ps1`/`.sh`
+bằng byte + cấu trúc (không chạy `cmd.exe` trên Linux).
 
 `bridge-v21-test.js` kiểm tra bằng repo git thật (bare remote + 2 clone):
 pull merge/rebase/ff-only, push upstream/--all/tags/force-with-lease,
@@ -908,6 +985,18 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.5.0 (2026-11-23)** — "Giống github.com hơn nữa": **tab Actions**
+  (workflows, runs, jobs, log, Rerun/Cancel); **trang repo mở rộng**
+  (chi tiết commit, blame, lịch sử file, compare `base...head`, chi tiết
+  issue/PR + bình luận, languages/contributors/topics); **command palette**
+  (Ctrl+K); **giao diện tối kiểu Primer** (lưu trong chrome.storage);
+  **Pull Origin mở rộng** (chọn remote/branch/mode/autostash, pull tất cả
+  remote, xem upstream, worktrees, sơ đồ commit); **kiểm tra đăng nhập
+  thật** (hiện email chính, cảnh báo nếu không phải
+  `nguyenvu16592b@gmail.com`); sửa `start-windows.bat` /
+  `bridge-doctor.bat` thiếu `endlocal` và `start-mac-linux.sh` chứa
+  em-dash. Test: 12 suite, 2 vòng liên tiếp đều qua (suite mới
+  `bridge-v350-test.js` và `bat-test.js` 105/105).
 - **v3.1.1 (2026-11-23)** — Thêm **thanh công cụ luôn hiện** (Repository / Branch / Fetch origin / Pull origin / Push origin / Publish branch) — trước đây nút Fetch/Pull/Push nằm sâu trong tab Local Git nên khó thấy. Nút **Clone / Mở bằng Git local** trong trang repo. Sửa bridge: Fetch và Clone giờ dùng token GitHub đã đăng nhập (repo private trước đây lỗi xác thực), Fetch từng remote riêng, báo lỗi rõ khi chưa có remote, Clone tự tạo thư mục cha; API mới `/api/repo/recent`, `/api/repo/find`. Sửa popup: kết quả Fetch/Pull/Push không còn bị "Token accepted" ghi đè; Pull dùng autostash, Push tự publish branch mới. Test: 10 suite qua trên Node 16.13.0 và 20; test end-to-end bằng Chromium thật `tests/e2e-toolbar.js` 49/49.
 - **v3.1.0 (2026-11-23)** — Mở rộng pull/push (xem trước, pull tất cả branch, hoàn tác pull, rebase giữ merge commit, squash/no-commit, strategy option, push nhiều remote, dry-run, atomic, follow-tags, push option, force-with-lease + force-if-includes, porcelain), dùng token GitHub cho remote HTTPS, tiến trình SSE, lịch sử pull/push, thanh Continue/Skip/Abort khi rebase dở. **Hạ yêu cầu Node.js xuống 16.13.0**: bỏ `fetch`/`Readable.fromWeb`/`AbortSignal.timeout`, thay bằng `http`/`https` có sẵn. Sửa lỗi `start-windows.bat` đọc nhầm số phiên bản Node (Node 22.11 bị coi là quá cũ). Test: 9 suite đều qua trên Node 16.13.0 và Node 20 (suite mới `bridge-v310-test.js`: 55/55).
 - **v3.0.2 (2026-11-23)** — Sửa triệt để lỗi không mở được

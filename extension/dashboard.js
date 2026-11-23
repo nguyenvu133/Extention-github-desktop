@@ -1,7 +1,7 @@
 'use strict';
 
 /*
- * PixiJS GitHub Desktop Sync — dashboard v3.1.1
+ * PixiJS GitHub Desktop Sync — dashboard v3.5.0
  *
  * A GitHub-like workspace in the browser:
  *   - Repositories tab: ALL GitHub repositories (search / filter / sort),
@@ -865,10 +865,12 @@ function showView(name) {
   $('view-repos').classList.toggle('hidden', name !== 'repos');
   $('view-repo').classList.toggle('hidden', name !== 'repo');
   $('view-local').classList.toggle('hidden', name !== 'local');
+  $('view-actions').classList.toggle('hidden', name !== 'actions');
   $('view-profile').classList.toggle('hidden', name !== 'profile');
   $('view-settings').classList.toggle('hidden', name !== 'settings');
   $('navRepos').classList.toggle('active', name === 'repos' || name === 'repo');
   $('navLocal').classList.toggle('active', name === 'local');
+  $('navActions').classList.toggle('active', name === 'actions');
   $('navProfile').classList.toggle('active', name === 'profile');
   $('navSettings').classList.toggle('active', name === 'settings');
 }
@@ -1157,9 +1159,14 @@ async function loadRepoCommits() {
     container.textContent = 'No commits found.';
     return;
   }
+  $('commitDetail').classList.add('hidden');
+  container.classList.remove('hidden');
   for (const c of commits) {
     const row = document.createElement('div');
     row.className = 'commititem';
+    row.style.cursor = 'pointer';
+    row.title = 'Bấm để xem chi tiết commit';
+    row.onclick = () => showCommitDetail(c.sha || c.hash).catch((err) => log('ERROR: ' + err.message));
     const title = document.createElement('b');
     title.textContent = c.short + ' · ' + c.message;
     const meta = document.createElement('small');
@@ -1215,9 +1222,14 @@ async function loadRepoPulls() {
     container.textContent = 'No open pull requests.';
     return;
   }
+  $('prDetail').classList.add('hidden');
+  container.classList.remove('hidden');
   for (const p of pulls) {
     const row = document.createElement('div');
     row.className = 'issueitem';
+    row.style.cursor = 'pointer';
+    row.title = 'Bấm để xem chi tiết PR';
+    row.onclick = () => showPrDetail(p.number).catch((err) => log('ERROR: ' + err.message));
     const title = document.createElement('b');
     const num = document.createElement('span');
     num.className = 'num';
@@ -1231,11 +1243,11 @@ async function loadRepoPulls() {
     const mergeBtn = document.createElement('button');
     mergeBtn.className = 'mini blue';
     mergeBtn.textContent = 'Merge';
-    mergeBtn.onclick = () => run('Pull request merged', () => mergePullRequest(p.number));
+    mergeBtn.onclick = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); run('Pull request merged', () => mergePullRequest(p.number)); };
     const closeBtn = document.createElement('button');
     closeBtn.className = 'mini';
     closeBtn.textContent = 'Close';
-    closeBtn.onclick = () => run('Pull request closed', () => closePullRequest(p.number));
+    closeBtn.onclick = (e) => { if (e && typeof e.stopPropagation === 'function') e.stopPropagation(); run('Pull request closed', () => closePullRequest(p.number)); };
     actions.append(mergeBtn, closeBtn);
     row.append(title, meta, actions);
     container.append(row);
@@ -1254,6 +1266,10 @@ async function loadFileTree(relPath) {
   container.className = '';
   container.innerHTML = '';
   $('fileViewerWrap').classList.add('hidden');
+  $('blameView').classList.add('hidden');
+  $('fileHistoryView').classList.add('hidden');
+  if (!currentPath) renderFileReadme().catch(() => {});
+  else $('fileReadmeWrap').classList.add('hidden');
   const entries = res.entries || [];
   if (!entries.length) {
     container.className = 'empty';
@@ -2523,6 +2539,7 @@ async function refreshAllLocal() {
   await loadOperation().catch(() => {});
   await loadUndoState().catch(() => {});
   await loadSyncHistory().catch(() => {});
+  await loadPullOriginPanel().catch(() => {}); // v3.5.0
 }
 
 /* ------------------------------------------------------------------ */
@@ -2622,6 +2639,7 @@ function applySettingsToUI() {
   $('settingsDefaultBranch').value = settingsDefaultBranch;
   $('settingsAutoSync').checked = $('autoSyncToggle').checked;
   $('settingsNotifications').checked = settingsNotifications;
+  $('themeSetting').value = currentTheme; // v3.5.0
   updateNotifBadge();
 }
 
@@ -2635,6 +2653,8 @@ async function saveSettings() {
     settingsNotifications,
     autoUpdateInterval: intervalSeconds,
   });
+  // v3.5.0: the theme select lives in Settings too.
+  await setTheme($('themeSetting').value || 'light');
   $('autoUpdateInterval').value = String(intervalSeconds);
   $('settingsStatus').textContent = 'Settings saved ✓' +
     (settingsDefaultBranch ? ` — default branch for new file trees: ${settingsDefaultBranch}.` : '');
@@ -2788,8 +2808,67 @@ $('navLocal').onclick = () => {
     loadRemotes().catch(() => {});
     loadDiffSummary().catch(() => {});
     loadTags().catch(() => {});
+    loadPullOriginPanel().catch(() => {}); // v3.5.0
   }
 };
+// v3.5.0: Actions tab + theme toggle + command palette + real-login check.
+$('navActions').onclick = () => {
+  showView('actions');
+  if (!currentRepo) {
+    $('actionsRunsList').className = 'empty';
+    $('actionsRunsList').textContent = 'Mở một repository để xem các lần chạy Actions.';
+    return;
+  }
+  loadActionsWorkflows().then(() => loadActionsRuns()).catch((err) => log('ERROR: ' + err.message));
+};
+$('themeToggleBtn').onclick = () => run('Giao diện đã đổi', toggleTheme);
+$('realLoginBtn').onclick = () => run('Kiểm tra đăng nhập thật', runRealLoginCheck);
+$('paletteBtn').onclick = () => openPalette();
+$('paletteCloseBtn').onclick = () => closePalette();
+$('paletteInput').oninput = () => { paletteSelected = 0; renderPalette(); };
+$('paletteInput').onkeydown = (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); paletteSelected = Math.min(paletteItems.length - 1, paletteSelected + 1); renderPalette(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); paletteSelected = Math.max(0, paletteSelected - 1); renderPalette(); }
+  else if (e.key === 'Enter') { e.preventDefault(); paletteRunSelected(); }
+  else if (e.key === 'Escape') { closePalette(); }
+};
+$('paletteOverlay').onclick = (e) => { if (e.target === $('paletteOverlay')) closePalette(); };
+if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if ($('paletteOverlay').classList.contains('hidden')) openPalette();
+    else closePalette();
+  } else if (e.key === 'Escape' && !$('paletteOverlay').classList.contains('hidden')) {
+    closePalette();
+  }
+});
+// v3.5.0: Actions view wiring.
+$('actionsRefreshBtn').onclick = () => run('Actions refreshed', async () => {
+  await loadActionsWorkflows();
+  await loadActionsRuns();
+});
+$('actionsWorkflowSelect').onchange = () => run('Actions refreshed', loadActionsRuns);
+$('actionsStatusSelect').onchange = () => run('Actions refreshed', loadActionsRuns);
+$('actionsBackBtn').onclick = () => {
+  $('actionsRunDetail').classList.add('hidden');
+  $('actionsRunsList').classList.remove('hidden');
+  currentActionsRun = null;
+};
+$('actionsRerunBtn').onclick = () => run('Rerun requested', rerunActionsRun);
+$('actionsCancelBtn').onclick = () => run('Cancel requested', cancelActionsRun);
+$('actionsLogBtn').onclick = () => run('Log loaded', loadActionsLog);
+// v3.5.0: repo pages wiring.
+$('commitDetailBackBtn').onclick = () => { $('commitDetail').classList.add('hidden'); $('commitList').classList.remove('hidden'); };
+$('compareBtn').onclick = () => run('Compare completed', runCompare);
+$('fileBlameBtn').onclick = () => run('Blame loaded', () => showBlame(selectedFile));
+$('fileHistoryBtn').onclick = () => run('File history loaded', () => showFileHistory(selectedFile));
+$('blameBackBtn').onclick = () => { $('blameView').classList.add('hidden'); $('fileViewerWrap').classList.remove('hidden'); };
+$('fileHistoryBackBtn').onclick = () => { $('fileHistoryView').classList.add('hidden'); $('fileViewerWrap').classList.remove('hidden'); };
+$('prDetailBackBtn').onclick = () => { $('prDetail').classList.add('hidden'); $('pullList').classList.remove('hidden'); };
+// v3.5.0: Pull Origin panel wiring.
+$('pullOriginBtn').onclick = () => run('Pull Origin completed', doPullOrigin);
+$('pullOriginAllBtn').onclick = () => run('Pull all remotes completed', doPullAllRemotes);
+$('pullOriginRefreshBtn').onclick = () => run('Pull Origin refreshed', loadPullOriginPanel);
 $('navProfile').onclick = () => {
   showView('profile');
   loadProfile().catch((err) => log('ERROR: ' + err.message));
@@ -3073,6 +3152,933 @@ $('copyPath').onclick = () => run('Repository path copied', async () => {
   if (!path) throw new Error('Connect a repository first');
   await navigator.clipboard.writeText(path);
 });
+
+/* ------------------------------------------------------------------ */
+/* v3.5.0 — Dashboard: Actions tab, repo pages, command palette,      */
+/* Primer dark theme toggle, Pull Origin panel, real-login check.      */
+/* API contract (bridge workstream, do not change the paths):          */
+/*   GET  /api/github/actions/workflows?owner=&repo=                   */
+/*   GET  /api/github/actions/runs?owner=&repo=&workflow_id=&status=  */
+/*        &branch=                                                     */
+/*   GET  /api/github/actions/runs/:id?owner=&repo=                    */
+/*   POST /api/github/actions/runs/:id/rerun {owner,repo}              */
+/*   POST /api/github/actions/runs/:id/cancel {owner,repo}             */
+/*   GET  /api/github/actions/runs/:id/jobs?owner=&repo=               */
+/*   GET  /api/github/actions/runs/:id/logs?owner=&repo= -> {ok, log}  */
+/*   GET  /api/github/repos/:o/:r/commits/:sha                         */
+/*   GET  /api/git/blame?path=&ref=                                    */
+/*   GET  /api/git/file-history?path=                                  */
+/*   GET  /api/github/repos/:o/:r/compare/:base...:head                 */
+/*   GET  /api/github/repos/:o/:r/languages, /contributors, /topics    */
+/*   GET  /api/github/repos/:o/:r/issues/:n -> {issue, comments}       */
+/*   POST /api/github/repos/:o/:r/issues/:n/comments {body}            */
+/*   GET  /api/github/repos/:o/:r/pulls/:n, /files, /reviews           */
+/*   GET  /api/git/pull/remotes (POST {mode, autostash})               */
+/*   GET  /api/git/upstream, /api/git/worktrees,                       */
+/*        POST /api/git/worktree/add|remove, GET /api/git/graph?limit= */
+/*   GET  /api/github/user/emails -> {ok, emails:[{email, primary,    */
+/*        verified}]}                                                  */
+/* All errors are shown in Vietnamese inside the view, never alert(). */
+/* ------------------------------------------------------------------ */
+
+const EXPECTED_ACCOUNT_EMAIL = 'nguyenvu16592b@gmail.com';
+let currentTheme = 'light'; // 'light' (default) | 'dark'
+let actionsWorkflows = [];
+let actionsRuns = [];
+let currentActionsRun = null; // { id, owner, repo }
+let currentCommitSha = null;
+let paletteItems = [];
+let paletteSelected = 0;
+
+/* ---------------- Theme (Primer dark toggle) ---------------- */
+
+// Apply a theme: data-theme="dark" on <html> (the base stylesheet is
+// the Primer dark palette); anything else means the light theme.
+// Persists in chrome.storage.local under key `theme`.
+function applyTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  const toggle = $('themeToggleBtn');
+  if (toggle) toggle.textContent = currentTheme === 'dark' ? '☀️' : '🌙';
+  const sel = $('themeSetting');
+  if (sel) sel.value = currentTheme;
+}
+
+async function loadStoredTheme() {
+  try {
+    const s = await chrome.storage.local.get({ theme: 'light' });
+    applyTheme(s.theme || 'light');
+  } catch (_) {
+    applyTheme('light');
+  }
+}
+
+async function setTheme(theme) {
+  applyTheme(theme);
+  try { await chrome.storage.local.set({ theme: currentTheme }); } catch (_) {}
+  log('Giao diện: ' + (currentTheme === 'dark' ? 'tối (Primer dark)' : 'sáng') + '.');
+}
+
+function toggleTheme() {
+  return setTheme(currentTheme === 'dark' ? 'light' : 'dark');
+}
+
+// Apply the stored theme as early as the load order allows (the inline
+// <script> in dashboard.html <head> already tried before first paint).
+loadStoredTheme().catch(() => {});
+
+/* ---------------- Safe markdown renderer (no external libs) ---------------- */
+
+// escapeHtml: every bit of user/markdown text goes through this first,
+// so a README containing <script> can never become live markup.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeLinkUrl(url) {
+  const u = String(url || '').trim();
+  if (/^https?:\/\//i.test(u) || u.startsWith('#') || u.startsWith('/')) return u;
+  return '#';
+}
+
+// Inline markup on already-escaped text: `code`, **bold**, *italic*,
+// [text](url). The inserted tags are ours; the text inside was escaped.
+function mdInline(escapedText) {
+  let out = escapedText;
+  out = out.replace(/`([^`]+)`/g, (m, code) => '<code>' + code + '</code>');
+  out = out.replace(/\[([^\]]+)\]\(([^)\s]+(?:\([^)\s]*\)[^)\s]*)*)\)/g, (m, text, url) =>
+    '<a href="' + escapeHtml(safeLinkUrl(url)) + '" target="_blank" rel="noopener">' + text + '</a>');
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  return out;
+}
+
+// Block markdown: headings, fenced code blocks, lists, tables, paragraphs.
+function renderMarkdown(md) {
+  const text = String(md || '');
+  const lines = text.split('\n');
+  const codeBlocks = [];
+  // Pull fenced code blocks out first so nothing inside is parsed.
+  let body = '';
+  let inFence = false;
+  let fenceBuf = [];
+  for (const line of lines) {
+    if (/^```/.test(line)) {
+      if (!inFence) { inFence = true; fenceBuf = []; }
+      else {
+        inFence = false;
+        codeBlocks.push(fenceBuf.join('\n'));
+        body += '\n@@CODE' + (codeBlocks.length - 1) + '@@\n';
+      }
+      continue;
+    }
+    if (inFence) fenceBuf.push(line);
+    else body += line + '\n';
+  }
+  if (inFence) { // unterminated fence — treat the rest as a code block
+    codeBlocks.push(fenceBuf.join('\n'));
+    body += '\n@@CODE' + (codeBlocks.length - 1) + '@@\n';
+  }
+
+  const out = [];
+  const bl = body.split('\n');
+  let i = 0;
+  while (i < bl.length) {
+    const line = bl[i];
+    if (!line.trim()) { i += 1; continue; }
+    const codeMatch = line.match(/^@@CODE(\d+)@@$/);
+    if (codeMatch) {
+      out.push('<pre><code>' + escapeHtml(codeBlocks[Number(codeMatch[1])] || '') + '</code></pre>');
+      i += 1;
+      continue;
+    }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) {
+      out.push('<h' + h[1].length + '>' + mdInline(escapeHtml(h[2].trim())) + '</h' + h[1].length + '>');
+      i += 1;
+      continue;
+    }
+    // Table: header row + separator row (| --- |) + body rows.
+    if (/^\|.*\|$/.test(line.trim()) && bl[i + 1] && /^\|[\s:|-]+\|$/.test(bl[i + 1].trim())) {
+      const cells = (row) => row.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      const head = cells(line);
+      let html = '<table><thead><tr>' + head.map((c) => '<th>' + mdInline(escapeHtml(c)) + '</th>').join('') + '</tr></thead><tbody>';
+      i += 2;
+      while (i < bl.length && /^\|.*\|$/.test(bl[i].trim())) {
+        html += '<tr>' + cells(bl[i]).map((c) => '<td>' + mdInline(escapeHtml(c)) + '</td>').join('') + '</tr>';
+        i += 1;
+      }
+      out.push(html + '</tbody></table>');
+      continue;
+    }
+    // Unordered / ordered list (consecutive lines).
+    if (/^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const tag = ordered ? 'ol' : 'ul';
+      let html = '<' + tag + '>';
+      while (i < bl.length && (ordered ? /^\s*\d+\.\s+/.test(bl[i]) : /^\s*[-*]\s+/.test(bl[i]))) {
+        const item = bl[i].replace(/^\s*(?:[-*]|\d+\.)\s+/, '');
+        html += '<li>' + mdInline(escapeHtml(item)) + '</li>';
+        i += 1;
+      }
+      out.push(html + '</' + tag + '>');
+      continue;
+    }
+    out.push('<p>' + mdInline(escapeHtml(line.trim())) + '</p>');
+    i += 1;
+  }
+  return out.join('\n') || '<p>(README trống)</p>';
+}
+
+/* ---------------- Real-login check ---------------- */
+
+// Runs login/diagnostics + /api/github/user + /api/github/user/emails
+// and shows login, avatar and the primary email. Warns clearly when
+// the primary email is NOT nguyenvu16592b@gmail.com. Never asks for or
+// displays any password / token / secret.
+async function runRealLoginCheck() {
+  const statusEl = $('realLoginStatus');
+  const resultEl = $('realLoginResult');
+  const warnEl = $('realLoginWarning');
+  const okEl = $('realLoginOk');
+  resultEl.classList.add('hidden');
+  warnEl.classList.add('hidden');
+  okEl.classList.add('hidden');
+  statusEl.textContent = 'Đang kiểm tra…';
+  try {
+    await loadLoginDiagnostics().catch(() => {});
+    let me;
+    try { me = await gh('/user'); } catch (_) { me = await gh('/me'); }
+    const user = (me && me.user) || me || null;
+    if (!me || (me.authed === false) || !user || !user.login) {
+      statusEl.textContent = 'Chưa đăng nhập GitHub — đăng nhập bằng 1 trong 3 cách bên dưới rồi bấm kiểm tra lại.';
+      return null;
+    }
+    let emails = [];
+    try {
+      const res = await gh('/user/emails');
+      emails = (res && res.emails) || [];
+    } catch (err) {
+      statusEl.textContent = 'Đã đăng nhập nhưng không lấy được danh sách email (' + err.message + '). Bridge cần bản v3.5.0 cho route /user/emails.';
+    }
+    const primary = emails.find((e) => e.primary) || emails.find((e) => e.verified) || emails[0] || null;
+    const primaryEmail = (primary && primary.email) || user.email || '';
+    $('realLoginAvatar').src = user.avatar_url || '';
+    $('realLoginAvatar').alt = user.login;
+    $('realLoginName').textContent = user.login + (user.name && user.name !== user.login ? ' (' + user.name + ')' : '');
+    $('realLoginEmail').textContent = primaryEmail ? 'Email chính: ' + primaryEmail : 'Không lấy được email chính.';
+    resultEl.classList.remove('hidden');
+    if (!primaryEmail) {
+      statusEl.textContent = 'Đã đăng nhập với tên ' + user.login + ' nhưng chưa xác định được email chính.';
+      return { user, emails };
+    }
+    if (primaryEmail.toLowerCase() !== EXPECTED_ACCOUNT_EMAIL.toLowerCase()) {
+      warnEl.textContent = '⚠️ CẢNH BÁO: email chính của tài khoản đang đăng nhập là ' + primaryEmail +
+        ' — KHÔNG phải ' + EXPECTED_ACCOUNT_EMAIL + '. Bạn đang đăng nhập sai tài khoản GitHub. Hãy đăng xuất rồi đăng nhập lại bằng tài khoản có email ' + EXPECTED_ACCOUNT_EMAIL + '.';
+      warnEl.classList.remove('hidden');
+      statusEl.textContent = 'Đã kiểm tra xong — thấy email khác với tài khoản mong đợi, xem cảnh báo bên dưới.';
+    } else {
+      okEl.classList.remove('hidden');
+      statusEl.textContent = 'Đã kiểm tra xong — đúng tài khoản ' + EXPECTED_ACCOUNT_EMAIL + '.';
+    }
+    return { user, emails };
+  } catch (err) {
+    statusEl.textContent = 'Không kiểm tra được: ' + err.message;
+    return null;
+  }
+}
+
+/* ---------------- GitHub Actions ---------------- */
+
+function actionsRepo() {
+  return currentRepo; // { owner, repo, full_name, default_branch } or null
+}
+
+function runStatusBadge(conclusion, status) {
+  const key = String(conclusion || status || '').toLowerCase();
+  const label = conclusion || status || '—';
+  const cls = key === 'success' ? 'success'
+    : key === 'failure' || key === 'failed' ? 'failure'
+    : key === 'cancelled' || key === 'skipped' ? 'cancelled'
+    : 'pending'; // pending / in_progress / queued / waiting → vàng
+  const badge = document.createElement('span');
+  badge.className = 'run-badge ' + cls;
+  badge.textContent = label;
+  return badge;
+}
+
+async function loadActionsWorkflows() {
+  const repo = actionsRepo();
+  const select = $('actionsWorkflowSelect');
+  select.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = 'Tất cả workflow';
+  select.append(all);
+  if (!repo) { actionsWorkflows = []; return []; }
+  try {
+    const res = await gh(`/actions/workflows?owner=${encodeURIComponent(repo.owner)}&repo=${encodeURIComponent(repo.repo)}`);
+    actionsWorkflows = res.workflows || [];
+    for (const w of actionsWorkflows) {
+      const opt = document.createElement('option');
+      opt.value = String(w.id);
+      opt.textContent = w.name || w.path || ('workflow ' + w.id);
+      select.append(opt);
+    }
+  } catch (err) {
+    log('ERROR: ' + err.message);
+    throw err;
+  }
+  return actionsWorkflows;
+}
+
+async function loadActionsRuns() {
+  const repo = actionsRepo();
+  const list = $('actionsRunsList');
+  const detail = $('actionsRunDetail');
+  detail.classList.add('hidden');
+  currentActionsRun = null;
+  if (!repo) {
+    list.className = 'empty';
+    list.textContent = 'Mở một repository để xem các lần chạy Actions.';
+    return [];
+  }
+  list.className = '';
+  list.textContent = 'Đang tải các lần chạy…';
+  let res;
+  try {
+    const workflowId = $('actionsWorkflowSelect').value;
+    const status = $('actionsStatusSelect').value;
+    let path = `/actions/runs?owner=${encodeURIComponent(repo.owner)}&repo=${encodeURIComponent(repo.repo)}`;
+    if (workflowId) path += '&workflow_id=' + encodeURIComponent(workflowId);
+    if (status) path += '&status=' + encodeURIComponent(status);
+    res = await gh(path);
+  } catch (err) {
+    list.className = 'empty';
+    list.textContent = 'Không tải được các lần chạy Actions: ' + err.message + ' (cần bridge v3.5.0 cho route /actions/runs).';
+    return [];
+  }
+  actionsRuns = res.runs || res.workflow_runs || [];
+  list.textContent = '';
+  if (!actionsRuns.length) {
+    list.className = 'empty';
+    list.textContent = 'Chưa có lần chạy Actions nào cho repo này.';
+    return [];
+  }
+  for (const run of actionsRuns) {
+    const row = document.createElement('button');
+    row.className = 'run-row';
+    const name = document.createElement('span');
+    name.className = 'rname';
+    name.textContent = (run.name || run.display_title || run.workflow_name || 'run') + ' #' + (run.run_number || run.id);
+    const meta = document.createElement('span');
+    meta.className = 'rmeta';
+    meta.textContent = (run.head_branch || run.branch || '') + ' · ' + timeAgo(run.created_at || run.updated_at);
+    row.append(name, runStatusBadge(run.conclusion, run.status), meta);
+    row.onclick = () => showActionsRun(run.id).catch((err) => log('ERROR: ' + err.message));
+    list.append(row);
+  }
+  return actionsRuns;
+}
+
+async function showActionsRun(id) {
+  const repo = actionsRepo();
+  if (!repo) return;
+  const list = $('actionsRunsList');
+  const detail = $('actionsRunDetail');
+  list.classList.add('hidden');
+  detail.classList.remove('hidden');
+  $('actionsLogWrap').classList.add('hidden');
+  $('actionsLogPre').textContent = 'Chưa tải log.';
+  $('actionsJobsList').className = 'empty';
+  $('actionsJobsList').textContent = 'Đang tải jobs…';
+  currentActionsRun = { id, owner: repo.owner, repo: repo.repo };
+  let run;
+  try {
+    const res = await gh(`/actions/runs/${encodeURIComponent(id)}?owner=${encodeURIComponent(repo.owner)}&repo=${encodeURIComponent(repo.repo)}`);
+    run = res.run || res;
+  } catch (err) {
+    $('actionsRunTitle').textContent = 'Run #' + id;
+    $('actionsRunMeta').textContent = 'Không tải được chi tiết run: ' + err.message;
+    return null;
+  }
+  $('actionsRunTitle').textContent = (run.name || run.display_title || 'Run') + ' #' + (run.run_number || run.id);
+  $('actionsRunMeta').textContent =
+    `${run.head_branch || run.branch || ''} · ${run.head_sha ? String(run.head_sha).slice(0, 7) : ''} · ${run.event || ''} · ` +
+    `tạo ${timeAgo(run.created_at)} · ${run.actor ? run.actor.login || run.actor : ''}`;
+  const jobsBox = $('actionsJobsList');
+  try {
+    const res = await gh(`/actions/runs/${encodeURIComponent(id)}/jobs?owner=${encodeURIComponent(repo.owner)}&repo=${encodeURIComponent(repo.repo)}`);
+    const jobs = res.jobs || [];
+    jobsBox.textContent = '';
+    if (!jobs.length) {
+      jobsBox.className = 'empty';
+      jobsBox.textContent = 'Run này chưa có job nào.';
+    } else {
+      jobsBox.className = '';
+      for (const job of jobs) {
+        const row = document.createElement('div');
+        row.className = 'job-row';
+        const name = document.createElement('span');
+        name.className = 'path';
+        name.textContent = job.name || ('job ' + job.id);
+        row.append(name, runStatusBadge(job.conclusion, job.status));
+        jobsBox.append(row);
+      }
+    }
+  } catch (err) {
+    jobsBox.className = 'empty';
+    jobsBox.textContent = 'Không tải được jobs: ' + err.message;
+  }
+  return run;
+}
+
+async function rerunActionsRun() {
+  if (!currentActionsRun) return;
+  const { id, owner, repo } = currentActionsRun;
+  const res = await gh(`/actions/runs/${encodeURIComponent(id)}/rerun`, 'POST', { owner, repo });
+  log('Đã yêu cầu rerun cho run #' + id + '.');
+  await showActionsRun(id);
+  return res;
+}
+
+async function cancelActionsRun() {
+  if (!currentActionsRun) return;
+  if (!confirm('Huỷ run Actions này?')) return null;
+  const { id, owner, repo } = currentActionsRun;
+  const res = await gh(`/actions/runs/${encodeURIComponent(id)}/cancel`, 'POST', { owner, repo });
+  log('Đã yêu cầu huỷ run #' + id + '.');
+  await showActionsRun(id);
+  return res;
+}
+
+async function loadActionsLog() {
+  if (!currentActionsRun) return;
+  const { id, owner, repo } = currentActionsRun;
+  const wrap = $('actionsLogWrap');
+  const pre = $('actionsLogPre');
+  wrap.classList.remove('hidden');
+  pre.textContent = 'Đang tải log…';
+  try {
+    const res = await gh(`/actions/runs/${encodeURIComponent(id)}/logs?owner=${encodeURIComponent(repo.owner)}&repo=${encodeURIComponent(repo.repo)}`);
+    const text = res.log || '';
+    const MAX_LOG = 200000;
+    pre.textContent = text.length > MAX_LOG
+      ? text.slice(0, MAX_LOG) + '\n\n… log đã cắt ở ' + MAX_LOG + ' ký tự …'
+      : (text || '(Log trống)');
+  } catch (err) {
+    pre.textContent = 'Không tải được log: ' + err.message;
+  }
+}
+
+/* ---------------- Repo pages (extend the existing repo view) ---------------- */
+
+// README rendered (markdown) below the file list, root folder only.
+async function renderFileReadme() {
+  const wrap = $('fileReadmeWrap');
+  if (!currentRepo || currentPath) { wrap.classList.add('hidden'); return; }
+  try {
+    const res = await gh(`/repos/${currentRepo.owner}/${currentRepo.repo}/readme`);
+    $('fileReadmeName').textContent = res.name || '';
+    $('fileReadmeRendered').innerHTML = renderMarkdown(res.content || '');
+    wrap.classList.remove('hidden');
+  } catch (_) {
+    wrap.classList.add('hidden');
+  }
+}
+
+// Commit detail: sha, message, author, stats, changed files with +/-.
+async function showCommitDetail(sha) {
+  if (!currentRepo) return;
+  currentCommitSha = sha;
+  const detail = $('commitDetail');
+  const list = $('commitList');
+  list.classList.add('hidden');
+  detail.classList.remove('hidden');
+  $('commitDetailTitle').textContent = 'Commit ' + String(sha).slice(0, 7);
+  $('commitDetailMeta').textContent = 'Đang tải…';
+  $('commitDetailStats').textContent = '';
+  const filesBox = $('commitDetailFiles');
+  filesBox.className = 'empty';
+  filesBox.textContent = 'Đang tải file thay đổi…';
+  let res;
+  try {
+    res = await gh(`/repos/${currentRepo.owner}/${currentRepo.repo}/commits/${encodeURIComponent(sha)}`);
+  } catch (err) {
+    $('commitDetailMeta').textContent = 'Không tải được commit: ' + err.message;
+    filesBox.textContent = 'Không tải được file thay đổi: ' + err.message;
+    return null;
+  }
+  const c = res.commit || res;
+  $('commitDetailTitle').textContent = String(c.sha || sha).slice(0, 7) + ' · ' + (c.message || c.commitMessage || '').split('\n')[0];
+  $('commitDetailMeta').textContent =
+    `${c.author || (c.authorInfo && c.authorInfo.name) || 'unknown'} · ` +
+    `${c.date ? new Date(c.date).toLocaleString() : ''} · SHA ${c.sha || sha}`;
+  const stats = c.stats || {};
+  $('commitDetailStats').textContent =
+    `Tổng: +${stats.additions || 0} −${stats.deletions || 0} · ${(c.files || []).length} file thay đổi`;
+  const files = c.files || [];
+  filesBox.textContent = '';
+  if (!files.length) {
+    filesBox.className = 'empty';
+    filesBox.textContent = 'Commit này không đổi file nào (hoặc bridge chưa trả về danh sách file).';
+  } else {
+    filesBox.className = '';
+    for (const f of files) {
+      const row = document.createElement('div');
+      row.className = 'commititem';
+      const title = document.createElement('b');
+      title.textContent = f.filename || f.path || '';
+      const meta = document.createElement('small');
+      meta.textContent = `+${f.additions || 0} −${f.deletions || 0} · ${f.status || ''}`;
+      row.append(title, meta);
+      filesBox.append(row);
+    }
+  }
+  return c;
+}
+
+// Compare base...head: files changed + diff stats.
+async function runCompare() {
+  const base = $('compareBase').value.trim();
+  const head = $('compareHead').value.trim();
+  const box = $('compareResult');
+  box.classList.remove('hidden');
+  if (!currentRepo) { box.textContent = 'Mở một repository trước.'; return; }
+  if (!base || !head) { box.textContent = 'Nhập cả Base và Head để so sánh.'; return; }
+  box.className = 'empty';
+  box.textContent = 'Đang so sánh…';
+  let res;
+  try {
+    res = await gh(`/repos/${currentRepo.owner}/${currentRepo.repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`);
+  } catch (err) {
+    box.textContent = 'Không so sánh được: ' + err.message;
+    return null;
+  }
+  const files = res.files || [];
+  const ahead = res.ahead_by != null ? res.ahead_by : (res.aheadBy || 0);
+  const behind = res.behind_by != null ? res.behind_by : (res.behindBy || 0);
+  box.className = '';
+  box.textContent = '';
+  const headEl = document.createElement('div');
+  headEl.className = 'commititem';
+  const title = document.createElement('b');
+  title.textContent = `${base}...${head} — ahead ${ahead} · behind ${behind} · ${files.length} file thay đổi`;
+  const meta = document.createElement('small');
+  meta.textContent = res.status || '';
+  headEl.append(title, meta);
+  box.append(headEl);
+  for (const f of files) {
+    const row = document.createElement('div');
+    row.className = 'commititem';
+    const t = document.createElement('b');
+    t.textContent = f.filename || f.path || '';
+    const m = document.createElement('small');
+    m.textContent = `+${f.additions || 0} −${f.deletions || 0} · ${f.status || ''}`;
+    row.append(t, m);
+    box.append(row);
+  }
+  return res;
+}
+
+// Blame view: per-line author + date + line number.
+async function showBlame(relPath) {
+  if (!currentRepo && !localConnected) return;
+  const branch = $('fileBranchSelect').value || (currentRepo && currentRepo.default_branch) || '';
+  const box = $('blameContent');
+  $('fileViewerWrap').classList.add('hidden');
+  $('fileHistoryView').classList.add('hidden');
+  $('blameView').classList.remove('hidden');
+  $('blameFileName').textContent = 'Blame — ' + relPath;
+  box.textContent = 'Đang tải blame…';
+  let res;
+  try {
+    res = await api('/api/git/blame?path=' + encodeURIComponent(relPath) + (branch ? '&ref=' + encodeURIComponent(branch) : ''));
+  } catch (err) {
+    box.textContent = 'Không tải được blame: ' + err.message + ' (cần repo local đã kết nối và bridge v3.5.0).';
+    return null;
+  }
+  const lines = res.lines || res.blame || [];
+  box.textContent = '';
+  if (!lines.length) {
+    box.textContent = 'Không có dòng blame nào cho file này.';
+    return res;
+  }
+  for (const ln of lines) {
+    const row = document.createElement('div');
+    row.className = 'blame-line';
+    const num = document.createElement('span');
+    num.className = 'bl-num';
+    num.textContent = String(ln.line || ln.number || '');
+    const author = document.createElement('span');
+    author.className = 'bl-author';
+    author.textContent = ln.author || ln.name || '—';
+    const date = document.createElement('span');
+    date.className = 'bl-date';
+    date.textContent = ln.date ? timeAgo(ln.date) : '';
+    const content = document.createElement('span');
+    content.textContent = ln.content || ln.text || '';
+    row.append(num, author, date, content);
+    box.append(row);
+  }
+  return res;
+}
+
+// File history view (local git).
+async function showFileHistory(relPath) {
+  const box = $('fileHistoryList');
+  $('fileViewerWrap').classList.add('hidden');
+  $('blameView').classList.add('hidden');
+  $('fileHistoryView').classList.remove('hidden');
+  $('fileHistoryName').textContent = 'Lịch sử — ' + relPath;
+  box.className = 'empty';
+  box.textContent = 'Đang tải lịch sử file…';
+  let res;
+  try {
+    res = await api('/api/git/file-history?path=' + encodeURIComponent(relPath));
+  } catch (err) {
+    box.textContent = 'Không tải được lịch sử file: ' + err.message + ' (cần repo local đã kết nối và bridge v3.5.0).';
+    return null;
+  }
+  const commits = res.commits || res.history || [];
+  box.textContent = '';
+  if (!commits.length) {
+    box.className = 'empty';
+    box.textContent = 'File này chưa có lịch sử commit nào.';
+    return res;
+  }
+  box.className = '';
+  for (const c of commits) {
+    const row = document.createElement('div');
+    row.className = 'commititem';
+    const title = document.createElement('b');
+    title.textContent = (c.sha || c.hash || '').slice(0, 7) + ' · ' + (c.subject || c.message || '');
+    const meta = document.createElement('small');
+    meta.textContent = (c.author || 'unknown') + ' · ' + (c.date ? new Date(c.date).toLocaleString() : timeAgo(c.date));
+    row.append(title, meta);
+    box.append(row);
+  }
+  return res;
+}
+
+// PR detail: title, state, author, files, reviews.
+async function showPrDetail(number) {
+  if (!currentRepo) return;
+  const detail = $('prDetail');
+  const list = $('pullList');
+  list.classList.add('hidden');
+  detail.classList.remove('hidden');
+  $('prDetailTitle').textContent = 'PR #' + number;
+  $('prDetailMeta').textContent = 'Đang tải…';
+  $('prDetailBody').textContent = '(No description)';
+  const filesBox = $('prDetailFiles');
+  const reviewsBox = $('prDetailReviews');
+  filesBox.className = 'empty';
+  filesBox.textContent = 'Đang tải file thay đổi…';
+  reviewsBox.className = 'empty';
+  reviewsBox.textContent = 'Đang tải reviews…';
+  let pr;
+  try {
+    const res = await gh(`${repoApiBase()}/pulls/${number}`);
+    pr = res.pull || res.pr || res;
+  } catch (err) {
+    $('prDetailMeta').textContent = 'Không tải được PR: ' + err.message;
+    return null;
+  }
+  $('prDetailTitle').textContent = '#' + (pr.number || number) + ' — ' + (pr.title || '');
+  $('prDetailMeta').textContent =
+    `${pr.user || ''} · ${pr.state || ''} · ${pr.head || ''} → ${pr.base || ''} · mở ${timeAgo(pr.created_at)}`;
+  $('prDetailBody').textContent = pr.body || '(No description)';
+  try {
+    const res = await gh(`${repoApiBase()}/pulls/${number}/files`);
+    const files = res.files || [];
+    filesBox.textContent = '';
+    if (!files.length) {
+      filesBox.className = 'empty';
+      filesBox.textContent = 'PR này không đổi file nào.';
+    } else {
+      filesBox.className = '';
+      for (const f of files) {
+        const row = document.createElement('div');
+        row.className = 'commititem';
+        const t = document.createElement('b');
+        t.textContent = f.filename || f.path || '';
+        const m = document.createElement('small');
+        m.textContent = `+${f.additions || 0} −${f.deletions || 0} · ${f.status || ''}`;
+        row.append(t, m);
+        filesBox.append(row);
+      }
+    }
+  } catch (err) {
+    filesBox.textContent = 'Không tải được file thay đổi: ' + err.message;
+  }
+  try {
+    const res = await gh(`${repoApiBase()}/pulls/${number}/reviews`);
+    const reviews = res.reviews || [];
+    reviewsBox.textContent = '';
+    if (!reviews.length) {
+      reviewsBox.className = 'empty';
+      reviewsBox.textContent = 'Chưa có review nào.';
+    } else {
+      reviewsBox.className = '';
+      for (const r of reviews) {
+        const row = document.createElement('div');
+        row.className = 'commititem';
+        const t = document.createElement('b');
+        t.textContent = (r.user || 'unknown') + ' · ' + (r.state || '');
+        const m = document.createElement('small');
+        m.textContent = (r.body || '') + (r.submitted_at ? ' · ' + timeAgo(r.submitted_at) : '');
+        row.append(t, m);
+        reviewsBox.append(row);
+      }
+    }
+  } catch (err) {
+    reviewsBox.textContent = 'Không tải được reviews: ' + err.message;
+  }
+  return pr;
+}
+
+/* ---------------- Pull Origin panel (Local Git) ---------------- */
+
+let pullOriginRemotes = [];
+
+async function loadPullOriginPanel() {
+  const remoteSel = $('pullOriginRemote');
+  const branchSel = $('pullOriginBranch');
+  const upstreamEl = $('pullOriginUpstream');
+  // Remotes (from /api/git/remotes).
+  try {
+    const data = await api('/api/git/remotes');
+    pullOriginRemotes = (data.remotes || []).map((r) => r.name);
+    const prev = remoteSel.value;
+    remoteSel.innerHTML = '';
+    if (!pullOriginRemotes.length) pullOriginRemotes = ['origin'];
+    for (const name of pullOriginRemotes) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      remoteSel.append(opt);
+    }
+    if (prev && pullOriginRemotes.includes(prev)) remoteSel.value = prev;
+  } catch (_) { /* offline — keep the default origin option */ }
+  // Branches (from the existing branch list).
+  try {
+    const data = await api('/api/git/branches');
+    const prev = branchSel.value;
+    branchSel.innerHTML = '';
+    const cur = document.createElement('option');
+    cur.value = '';
+    cur.textContent = '— branch hiện tại —';
+    branchSel.append(cur);
+    for (const b of data.branches || []) {
+      const opt = document.createElement('option');
+      opt.value = b.name;
+      opt.textContent = (b.current ? '● ' : '') + b.name;
+      branchSel.append(opt);
+    }
+    if (prev) branchSel.value = prev;
+  } catch (_) { /* offline — keep the current-branch option */ }
+  // Upstream info.
+  try {
+    const up = await api('/api/git/upstream');
+    if (up.hasUpstream === false || !up.upstream) {
+      upstreamEl.textContent = 'Chưa có upstream — branch này chưa gắn với remote nào (tick "Set upstream" khi push).';
+    } else {
+      upstreamEl.textContent = `Upstream: ${up.upstream} • ahead ${Number(up.ahead) || 0} behind ${Number(up.behind) || 0}`;
+    }
+  } catch (err) {
+    upstreamEl.textContent = 'Không lấy được upstream: ' + err.message;
+  }
+}
+
+function renderPullOriginResult(box, res, label) {
+  box.textContent = '';
+  box.classList.remove('hidden');
+  if (res && res.conflict) {
+    box.append(mk('h4', 'bad', `⚠ Conflict (${res.operation || 'merge'}) ở ${(res.conflicts || []).length} file — xem panel Merge & Conflicts bên dưới.`));
+    if (res.hint) box.append(mk('div', 'hint', res.hint));
+    return;
+  }
+  if (res && res.upToDate) {
+    box.append(mk('h4', 'ok', '✓ Đã cập nhật — không có commit mới.'));
+    return;
+  }
+  const s = (res && res.stats) || {};
+  box.append(mk('h4', 'ok', `✓ ${label} — ${res.commitsPulled || 0} commit, ${s.fileCount || 0} file, +${s.insertions || 0} −${s.deletions || 0}${res.fastForward ? ' · fast-forward' : ''}`));
+  if (res.commits && res.commits.length) box.append(commitListEl(res.commits));
+  if (s.files && s.files.length) box.append(fileListEl(s.files));
+}
+
+async function doPullOrigin() {
+  const box = $('pullOriginResults');
+  box.classList.remove('hidden');
+  box.textContent = 'Đang pull…';
+  const body = {
+    remote: $('pullOriginRemote').value || 'origin',
+    branch: $('pullOriginBranch').value || null,
+    mode: $('pullOriginMode').value || 'merge',
+    autostash: !!$('pullOriginAutostash').checked,
+    useGithubAuth: !!$('useGithubAuthCheck').checked,
+  };
+  let res;
+  try {
+    res = await api('/api/git/pull', 'POST', body);
+  } catch (err) {
+    const d = err.data || {};
+    box.textContent = '';
+    box.append(mk('h4', 'bad', '✗ Pull thất bại' + (d.reason && d.reason !== 'unknown' ? ` (${d.reason})` : '')));
+    if (d.hint) box.append(mk('div', 'warn', d.hint));
+    throw err;
+  }
+  renderPullOriginResult(box, res, `Pull (${body.mode}) từ ${body.remote}${body.branch ? '/' + body.branch : ''}`);
+  await handlePossibleConflict(res, 'Pull Origin').catch(() => {});
+  await afterRemoteOp(res);
+  await loadPullOriginPanel().catch(() => {});
+  return res;
+}
+
+async function doPullAllRemotes() {
+  const box = $('pullOriginResults');
+  box.classList.remove('hidden');
+  box.textContent = 'Đang pull từ tất cả remote…';
+  const body = {
+    mode: $('pullOriginMode').value || 'merge',
+    autostash: !!$('pullOriginAutostash').checked,
+  };
+  let res;
+  try {
+    res = await api('/api/git/pull/remotes', 'POST', body);
+  } catch (err) {
+    const d = err.data || {};
+    box.textContent = '';
+    box.append(mk('h4', 'bad', '✗ Pull tất cả remote thất bại' + (d.reason && d.reason !== 'unknown' ? ` (${d.reason})` : '')));
+    if (d.hint) box.append(mk('div', 'warn', d.hint));
+    throw err;
+  }
+  box.textContent = '';
+  const results = res.results || [];
+  box.append(mk('h4', res.ok === false ? 'bad' : 'ok',
+    `✓ Pull tất cả remote (${body.mode}) — ${results.filter((r) => r.ok).length}/${results.length} remote ok`));
+  const ul = mk('ul');
+  for (const r of results) {
+    ul.append(mk('li', r.ok ? 'ok' : 'bad',
+      `${r.remote}: ${r.ok ? `${r.commitsPulled || 0} commit${r.upToDate ? ' (đã cập nhật)' : ''}` : (r.error || 'lỗi')}`));
+  }
+  if (ul.childNodes.length) box.append(ul);
+  await afterRemoteOp(res).catch(() => {});
+  await loadPullOriginPanel().catch(() => {});
+  return res;
+}
+
+/* ---------------- Command palette (Ctrl+K) ---------------- */
+
+function paletteActionList() {
+  const items = [];
+  const go = (label, hint, runFn) => items.push({ label, hint, run: runFn });
+  go('Đi tới: Repositories', 'Mở tab danh sách repo', () => showView('repos'));
+  go('Đi tới: Local Git', 'Mở tab Git local', () => { showView('local'); if (localConnected) loadPullOriginPanel().catch(() => {}); });
+  go('Đi tới: Actions', 'Mở tab GitHub Actions', () => { showView('actions'); loadActionsWorkflows().then(() => loadActionsRuns()).catch((e) => log('ERROR: ' + e.message)); });
+  go('Đi tới: Hồ sơ', 'Mở tab hồ sơ GitHub', () => { showView('profile'); loadProfile().catch((e) => log('ERROR: ' + e.message)); });
+  go('Đi tới: Cài đặt', 'Mở tab cài đặt', () => { showView('settings'); applySettingsToUI(); });
+  go('Fetch', 'git fetch — lấy thông tin mới từ remote', () => run('Fetch completed', doFetch));
+  go('Pull', 'git pull — kéo commit mới về máy', () => run('Pull completed', doPull));
+  go('Push', 'git push — đẩy commit lên remote', () => run('Push completed', doPush));
+  go('Đổi giao diện sáng / tối', 'Chuyển giữa giao diện sáng và tối', () => toggleTheme());
+  for (const repo of allRepos.slice(0, 50)) {
+    go('Mở repo: ' + repo.full_name, repo.description || '', () => openRepo(repo));
+  }
+  if (currentRepo) {
+    go('Mở issue #… (repo hiện tại)', 'Gõ số issue, ví dụ "issue 12"', (q) => openPaletteNumber(q, 'issue'));
+    go('Mở PR #… (repo hiện tại)', 'Gõ số PR, ví dụ "pr 5"', (q) => openPaletteNumber(q, 'pr'));
+  }
+  return items;
+}
+
+function openPaletteNumber(query, kind) {
+  const m = String(query || '').match(/(\d+)/);
+  if (!m) {
+    log('Nhập số ' + (kind === 'issue' ? 'issue' : 'PR') + ' — ví dụ "' + kind + ' 12".');
+    return;
+  }
+  const n = Number(m[1]);
+  if (kind === 'issue') {
+    showView('repo');
+    showRepoTab('issues');
+    loadRepoIssues().then(() => showIssueDetail(n)).catch((e) => log('ERROR: ' + e.message));
+  } else {
+    showView('repo');
+    showRepoTab('pulls');
+    loadRepoPulls().then(() => showPrDetail(n)).catch((e) => log('ERROR: ' + e.message));
+  }
+}
+
+function paletteFilter(query) {
+  const q = String(query || '').trim().toLowerCase();
+  const all = paletteActionList();
+  if (!q) return all;
+  // "issue 12" / "pr 5" / "#12" → open by number in the current repo.
+  const numMatch = q.match(/^(?:issue|pr|#)\s*(\d+)$/) || q.match(/^#(\d+)$/);
+  if (numMatch && currentRepo) {
+    const kind = q.startsWith('pr') ? 'pr' : 'issue';
+    return [{ label: `Mở ${kind === 'issue' ? 'issue' : 'PR'} #${numMatch[1]} trong ${currentRepo.full_name}`, hint: 'Enter để mở', run: () => openPaletteNumber(numMatch[1], kind) }];
+  }
+  return all.filter((it) =>
+    it.label.toLowerCase().includes(q) || (it.hint || '').toLowerCase().includes(q));
+}
+
+function renderPalette() {
+  const list = $('paletteList');
+  const q = $('paletteInput').value;
+  paletteItems = paletteFilter(q);
+  if (paletteSelected >= paletteItems.length) paletteSelected = 0;
+  list.textContent = '';
+  if (!paletteItems.length) {
+    list.className = 'empty';
+    list.textContent = 'Không có lệnh nào khớp "' + q + '".';
+    return;
+  }
+  list.className = 'palette-list';
+  paletteItems.forEach((item, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'palette-item' + (idx === paletteSelected ? ' selected' : '');
+    btn.textContent = item.label;
+    if (item.hint) {
+      const hint = document.createElement('small');
+      hint.textContent = item.hint;
+      btn.append(hint);
+    }
+    btn.onclick = () => {
+      closePalette();
+      try { item.run($('paletteInput').value); } catch (err) { log('ERROR: ' + err.message); }
+    };
+    list.append(btn);
+  });
+}
+
+function openPalette() {
+  $('paletteOverlay').classList.remove('hidden');
+  $('paletteInput').value = '';
+  paletteSelected = 0;
+  renderPalette();
+  $('paletteInput').focus();
+}
+
+function closePalette() {
+  $('paletteOverlay').classList.add('hidden');
+}
+
+function paletteRunSelected() {
+  const item = paletteItems[paletteSelected];
+  if (!item) return;
+  const q = $('paletteInput').value;
+  closePalette();
+  try { item.run(q); } catch (err) { log('ERROR: ' + err.message); }
+}
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
@@ -3387,6 +4393,7 @@ setInterval(() => { if (dbState.bridge) dbRender(); }, 30000);
 dbRender();
 
 (async () => {
+  await loadStoredTheme().catch(() => {}); // v3.5.0: theme before first paint
   const c = await cfg();
   $('bridgeUrl').value = c.bridgeUrl;
   $('token').value = c.token;

@@ -3,7 +3,7 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.1.1
+ * v3.5.0
  *
  * A dependency-free local bridge (Node >= 16.13, only built-in modules) that
  * exposes two things to the companion Chrome extension:
@@ -92,6 +92,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const https = require('https');
+const zlib = require('zlib'); // v3.5.0: inflate GitHub Actions log ZIPs (no extra dependency)
 
 // v3.1.0: minimum Node.js is 16.13.0 (was 18). Fail loudly and clearly.
 (function checkNodeVersion() {
@@ -106,7 +107,7 @@ const https = require('https');
 })();
 const { URL } = require('url');
 
-const VERSION = '3.1.1';
+const VERSION = '3.5.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -126,6 +127,7 @@ const GIT_TIMEOUT_MS = 120000; // hard cap so a credential prompt can never hang
 const GH_TIMEOUT_MS = 20000; // GitHub API calls must fail fast
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_DIFF_CHARS = 400000;
+const MAX_LOG_CHARS = 200 * 1024; // v3.5.0: Actions run logs are truncated to ~200 KB of text
 const GH_SCOPES = 'repo read:user';
 const AUTO_UPDATE_MIN_SECONDS = 15;
 const AUTO_UPDATE_MAX_SECONDS = 3600;
@@ -2179,6 +2181,81 @@ function pushOptionsFrom(body) {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Worktrees + Actions log ZIP (v3.5.0)                                */
+/* ------------------------------------------------------------------ */
+
+// Parse `git worktree list --porcelain` into plain objects. Entries are
+// blank-line separated; fields: worktree <path>, HEAD <sha>,
+// branch refs/heads/<name> (absent when detached), bare, detached,
+// locked [reason], prunable [reason].
+function parseWorktreeList(raw) {
+  const worktrees = [];
+  let cur = null;
+  const flush = () => { if (cur) worktrees.push(cur); cur = null; };
+  for (const line of String(raw || '').split('\n')) {
+    const text = line.trim();
+    if (!text) { flush(); continue; }
+    if (text.startsWith('worktree ')) {
+      flush();
+      cur = { path: text.slice(9).trim(), branch: null, sha: null, bare: false, detached: false, locked: false, prunable: false };
+      continue;
+    }
+    if (!cur) continue;
+    if (text.startsWith('HEAD ')) cur.sha = text.slice(5).trim() || null;
+    else if (text.startsWith('branch ')) cur.branch = text.slice(7).trim().replace(/^refs\/heads\//, '') || null;
+    else if (text === 'bare') cur.bare = true;
+    else if (text === 'detached') cur.detached = true;
+    else if (text === 'locked' || text.startsWith('locked ')) cur.locked = true;
+    else if (text === 'prunable' || text.startsWith('prunable ')) cur.prunable = true;
+  }
+  flush();
+  return worktrees;
+}
+
+async function listWorktrees() {
+  return parseWorktreeList(await runGit(['worktree', 'list', '--porcelain']));
+}
+
+// Default branch of a remote, from refs/remotes/<remote>/HEAD
+// (set by clone/fetch; no network call). Null when unknown.
+async function remoteDefaultBranch(remote) {
+  try {
+    const ref = (await runGit(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`])).trim();
+    if (ref.startsWith(`${remote}/`)) return ref.slice(remote.length + 1) || null;
+  } catch (_) {}
+  return null;
+}
+
+// Unpack a GitHub Actions run-log ZIP (one .txt per job) into plain
+// text. No unzip dependency is bundled, so local file headers
+// (PK\x03\x04) are parsed by hand and DEFLATE entries are inflated
+// with the built-in zlib. Returns null when the buffer is not a ZIP
+// (the caller then falls back to the raw text).
+function extractTextFromLogZip(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return null;
+  if (buf.readUInt32LE(0) !== 0x04034b50) return null;
+  const parts = [];
+  let off = 0;
+  while (off + 30 <= buf.length && buf.readUInt32LE(off) === 0x04034b50) {
+    const method = buf.readUInt16LE(off + 8);
+    const compSize = buf.readUInt32LE(off + 18);
+    const nameLen = buf.readUInt16LE(off + 26);
+    const extraLen = buf.readUInt16LE(off + 28);
+    const name = buf.toString('utf8', off + 30, off + 30 + nameLen);
+    const dataStart = off + 30 + nameLen + extraLen;
+    const dataEnd = Math.min(buf.length, dataStart + compSize);
+    const comp = buf.subarray(dataStart, dataEnd);
+    try {
+      const raw = method === 8 ? zlib.inflateRawSync(comp) : method === 0 ? comp : null;
+      if (raw) parts.push(`===== ${name} =====\n${raw.toString('utf8')}`);
+    } catch (_) { /* skip an unreadable entry; other files may still parse */ }
+    if (dataEnd <= off) break;
+    off = dataEnd;
+  }
+  return parts.length ? parts.join('\n') : null;
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   const route = url.pathname;
@@ -2403,6 +2480,20 @@ async function handle(req, res) {
       scopes: ghConfig.scopes || null,
       authedAt: ghConfig.authedAt,
     });
+  }
+
+  // v3.5.0: real-login verify — the email list GitHub returns for the
+  // signed-in account. Read-only; no token is ever returned here.
+  if (route === '/api/github/user/emails' && req.method === 'GET') {
+    requireGhAuth();
+    const gh = await ghRequest('/user/emails', { useCache: false });
+    const emails = (Array.isArray(gh.data) ? gh.data : []).map((e) => ({
+      email: e.email || '',
+      primary: !!e.primary,
+      verified: !!e.verified,
+      visibility: e.visibility || null,
+    }));
+    return send(req, res, 200, { ok: true, emails });
   }
 
   /* ==================== OAUTH WEB FLOW (v2.1) ==================== */
@@ -2707,6 +2798,110 @@ async function handle(req, res) {
     });
   }
 
+  /* ==================== GITHUB ACTIONS (v3.5.0) ==================== */
+  // Workflows / runs / jobs / logs via ghRequest, same auth + cache
+  // style as the other /api/github routes. owner/repo arrive as query
+  // params (POST rerun/cancel also accept them in the body).
+  const actionsMatch = route.match(/^\/api\/github\/actions\/(.+)$/);
+  if (actionsMatch) {
+    requireGhAuth();
+    const rest = actionsMatch[1];
+    const owner = safeGhPath(decodeURIComponent(String((body && body.owner) || url.searchParams.get('owner') || '')));
+    const repo = safeGhPath(decodeURIComponent(String((body && body.repo) || url.searchParams.get('repo') || '')));
+    const normalizeRun = (r) => (r ? {
+      id: r.id, name: r.name || '', run_number: r.run_number || null,
+      head_branch: r.head_branch || '', head_sha: r.head_sha || '',
+      status: r.status || '', conclusion: r.conclusion || null, event: r.event || '',
+      workflow_id: r.workflow_id || null, created_at: r.created_at || null,
+      updated_at: r.updated_at || null, html_url: r.html_url || '',
+    } : null);
+
+    if (rest === 'workflows' && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/actions/workflows`, { useCache: true });
+      const d = gh.data || {};
+      return send(req, res, 200, {
+        ok: true, total_count: d.total_count || 0,
+        workflows: (Array.isArray(d.workflows) ? d.workflows : []).map((w) => ({
+          id: w.id, name: w.name || '', path: w.path || '', state: w.state || '',
+          created_at: w.created_at || null, updated_at: w.updated_at || null,
+          html_url: w.html_url || '', badge_url: w.badge_url || '',
+        })),
+        notModified: !!gh.notModified,
+      });
+    }
+
+    if (rest === 'runs' && req.method === 'GET') {
+      const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+      const params = new URLSearchParams({ per_page: String(perPage) });
+      if (url.searchParams.get('workflow_id')) params.set('workflow_id', url.searchParams.get('workflow_id'));
+      if (url.searchParams.get('status')) params.set('status', url.searchParams.get('status'));
+      if (url.searchParams.get('branch')) params.set('branch', url.searchParams.get('branch'));
+      const gh = await ghRequest(`/repos/${owner}/${repo}/actions/runs?${params.toString()}`, { useCache: false });
+      const d = gh.data || {};
+      return send(req, res, 200, { ok: true, total_count: d.total_count || 0, runs: (Array.isArray(d.workflow_runs) ? d.workflow_runs : []).map(normalizeRun) });
+    }
+
+    const runMatch = rest.match(/^runs\/(\d+)$/);
+    if (runMatch && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/actions/runs/${runMatch[1]}`, { useCache: false });
+      return send(req, res, 200, { ok: true, run: normalizeRun(gh.data) });
+    }
+
+    const rerunMatch = rest.match(/^runs\/(\d+)\/rerun$/);
+    if (rerunMatch && req.method === 'POST') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/actions/runs/${rerunMatch[1]}/rerun`, { method: 'POST', body: {} });
+      return send(req, res, 200, { ok: true, run: normalizeRun(gh.data) });
+    }
+
+    const cancelMatch = rest.match(/^runs\/(\d+)\/cancel$/);
+    if (cancelMatch && req.method === 'POST') {
+      await ghRequest(`/repos/${owner}/${repo}/actions/runs/${cancelMatch[1]}/cancel`, { method: 'POST', body: {} });
+      return send(req, res, 200, { ok: true, cancelled: true });
+    }
+
+    const jobsMatch = rest.match(/^runs\/(\d+)\/jobs$/);
+    if (jobsMatch && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/actions/runs/${jobsMatch[1]}/jobs`, { useCache: false });
+      const d = gh.data || {};
+      return send(req, res, 200, {
+        ok: true, total_count: d.total_count || 0,
+        jobs: (Array.isArray(d.jobs) ? d.jobs : []).map((j) => ({
+          id: j.id, run_id: j.run_id || null, name: j.name || '', status: j.status || '',
+          conclusion: j.conclusion || null, started_at: j.started_at || null,
+          completed_at: j.completed_at || null, html_url: j.html_url || '',
+          steps: Array.isArray(j.steps) ? j.steps.map((s) => ({ name: s.name || '', status: s.status || '', conclusion: s.conclusion || null })) : [],
+        })),
+      });
+    }
+
+    const logsMatch = rest.match(/^runs\/(\d+)\/logs$/);
+    if (logsMatch && req.method === 'GET') {
+      // GitHub answers with a 302 to a short-lived ZIP download; the
+      // bridge follows it (httpFetch) and unpacks the .txt entries.
+      let logsRes;
+      try {
+        logsRes = await httpFetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/actions/runs/${logsMatch[1]}/logs`, {
+          headers: ghHeaders(ghConfig.token), timeout: GH_TIMEOUT_MS,
+        });
+      } catch (err) {
+        throw new GhError(502, `Không tải được log: ${err.message}`);
+      }
+      if (!logsRes.ok) {
+        if (logsRes.status === 404) throw new GhError(404, 'Không tìm thấy log cho lần chạy này — log có thể đã hết hạn (GitHub chỉ giữ log 90 ngày).');
+        if (logsRes.status === 410) throw new GhError(410, 'Log của lần chạy này đã bị xóa (hết hạn lưu trữ).');
+        throw new GhError(logsRes.status, `Không tải được log (GitHub trả về ${logsRes.status}).`);
+      }
+      const buf = Buffer.from(await logsRes.arrayBuffer());
+      let text = extractTextFromLogZip(buf);
+      if (text == null) text = buf.toString('utf8');
+      const truncated = text.length > MAX_LOG_CHARS;
+      if (truncated) text = text.slice(0, MAX_LOG_CHARS);
+      return send(req, res, 200, { ok: true, truncated, log: text });
+    }
+
+    return send(req, res, 404, { error: `Unknown GitHub endpoint: ${req.method} ${route}` });
+  }
+
   // /api/github/repos/:owner/:repo and everything below it.
   const repoMatch = route.match(/^\/api\/github\/repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
   if (repoMatch && (req.method === 'GET' || req.method === 'PUT' || req.method === 'POST' || req.method === 'DELETE' || req.method === 'PATCH')) {
@@ -2736,6 +2931,75 @@ async function handle(req, res) {
       if (pathFilter) apiPath += `&path=${encodeURIComponent(pathFilter)}`;
       const gh = await ghRequest(apiPath, { useCache: true });
       return send(req, res, 200, { ok: true, commits: (Array.isArray(gh.data) ? gh.data : []).map(normalizeCommit), notModified: !!gh.notModified });
+    }
+
+    // v3.5.0: single commit detail (files + stats, GitHub-like page).
+    const commitDetailMatch = rest.match(/^commits\/([^/]+)$/);
+    if (commitDetailMatch && req.method === 'GET') {
+      const sha = safeGhPath(decodeURIComponent(commitDetailMatch[1]));
+      const gh = await ghRequest(`/repos/${owner}/${repo}/commits/${sha}`, { useCache: false });
+      const d = gh.data || {};
+      return send(req, res, 200, {
+        ok: true,
+        commit: normalizeCommit(d),
+        author: (d.author && d.author.login) || null,
+        committer: (d.committer && d.committer.login) || null,
+        parents: Array.isArray(d.parents) ? d.parents.map((p) => p.sha) : [],
+        stats: d.stats || null,
+        files: Array.isArray(d.files) ? d.files.map((f) => ({
+          filename: f.filename || '', status: f.status || '', additions: f.additions || 0,
+          deletions: f.deletions || 0, changes: f.changes || 0, patch: f.patch || '',
+        })) : [],
+      });
+    }
+
+    // v3.5.0: compare base...head (URL-encode each side, keep the
+    // literal "..." separator GitHub expects).
+    const compareMatch = rest.match(/^compare\/(.+)$/);
+    if (compareMatch && req.method === 'GET') {
+      const spec = decodeURIComponent(compareMatch[1]);
+      const sep = spec.indexOf('...');
+      if (sep < 0) throw new Error('Compare cần dạng base...head (ví dụ main...feature).');
+      const base = encodeURIComponent(spec.slice(0, sep));
+      const head = encodeURIComponent(spec.slice(sep + 3));
+      if (!base || !head) throw new Error('Compare cần cả base và head.');
+      const gh = await ghRequest(`/repos/${owner}/${repo}/compare/${base}...${head}`, { useCache: false });
+      const d = gh.data || {};
+      return send(req, res, 200, {
+        ok: true, status: d.status || '', ahead_by: d.ahead_by || 0, behind_by: d.behind_by || 0,
+        total_commits: d.total_commits || 0,
+        commits: (Array.isArray(d.commits) ? d.commits : []).map(normalizeCommit),
+        files: (Array.isArray(d.files) ? d.files : []).map((f) => ({
+          filename: f.filename || '', status: f.status || '', additions: f.additions || 0,
+          deletions: f.deletions || 0, changes: f.changes || 0, patch: f.patch || '',
+        })),
+      });
+    }
+
+    // v3.5.0: languages / contributors / topics. Topics need no
+    // accept-preview header on the 2022-11-28 API version.
+    if (rest === 'languages' && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/languages`, { useCache: true });
+      return send(req, res, 200, { ok: true, languages: gh.data || {}, notModified: !!gh.notModified });
+    }
+
+    if (rest === 'contributors' && req.method === 'GET') {
+      const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+      const gh = await ghRequest(`/repos/${owner}/${repo}/contributors?per_page=${perPage}`, { useCache: true });
+      return send(req, res, 200, {
+        ok: true,
+        contributors: (Array.isArray(gh.data) ? gh.data : []).map((c) => ({
+          login: c.login || '', id: c.id || null, avatar_url: c.avatar_url || '',
+          contributions: c.contributions || 0, html_url: c.html_url || '',
+        })),
+        notModified: !!gh.notModified,
+      });
+    }
+
+    if (rest === 'topics' && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/topics`, { useCache: true });
+      const d = gh.data || {};
+      return send(req, res, 200, { ok: true, topics: Array.isArray(d.names) ? d.names : [], notModified: !!gh.notModified });
     }
 
     if (rest === 'readme' && req.method === 'GET') {
@@ -2887,6 +3151,13 @@ async function handle(req, res) {
     }
 
     const issueCommentsMatch = rest.match(/^issues\/(\d+)\/comments$/);
+    // v3.5.0: list comments. (GET issue detail above already returns
+    // { issue, comments } — this endpoint is the plain list.)
+    if (issueCommentsMatch && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/issues/${issueCommentsMatch[1]}/comments`, { useCache: false });
+      return send(req, res, 200, { ok: true, comments: (Array.isArray(gh.data) ? gh.data : []).map(normalizeComment) });
+    }
+
     if (issueCommentsMatch && req.method === 'POST') {
       const commentBody = String(body.body || '').trim();
       if (!commentBody) throw new Error('Comment body is required');
@@ -2928,6 +3199,38 @@ async function handle(req, res) {
       if (state !== 'open' && state !== 'closed') throw new Error("Pull request state must be 'open' or 'closed'");
       const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullMatch[1]}`, { method: 'PATCH', body: { state } });
       return send(req, res, 200, { ok: true, pull: normalizePull(gh.data) });
+    }
+
+    // v3.5.0: pull detail / files / reviews (no GET detail existed;
+    // only PATCH close/reopen and PUT merge were present).
+    if (pullMatch && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullMatch[1]}`, { useCache: false });
+      return send(req, res, 200, { ok: true, pull: normalizePull(gh.data) });
+    }
+
+    const pullFilesMatch = rest.match(/^pulls\/(\d+)\/files$/);
+    if (pullFilesMatch && req.method === 'GET') {
+      const perPage = Math.min(100, Math.max(1, Number(url.searchParams.get('per_page')) || 30));
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullFilesMatch[1]}/files?per_page=${perPage}`, { useCache: false });
+      return send(req, res, 200, {
+        ok: true,
+        files: (Array.isArray(gh.data) ? gh.data : []).map((f) => ({
+          filename: f.filename || '', status: f.status || '', additions: f.additions || 0,
+          deletions: f.deletions || 0, changes: f.changes || 0, patch: f.patch || '',
+        })),
+      });
+    }
+
+    const pullReviewsMatch = rest.match(/^pulls\/(\d+)\/reviews$/);
+    if (pullReviewsMatch && req.method === 'GET') {
+      const gh = await ghRequest(`/repos/${owner}/${repo}/pulls/${pullReviewsMatch[1]}/reviews`, { useCache: false });
+      return send(req, res, 200, {
+        ok: true,
+        reviews: (Array.isArray(gh.data) ? gh.data : []).map((r) => ({
+          id: r.id, user: (r.user && r.user.login) || '', state: r.state || '',
+          body: r.body || '', submitted_at: r.submitted_at || null, html_url: r.html_url || '',
+        })),
+      });
     }
 
     if (rest === 'releases' && req.method === 'GET') {
@@ -3255,6 +3558,57 @@ async function handle(req, res) {
   if (route === '/api/git/pull/last' && req.method === 'GET') {
     const head = await headSha();
     return send(req, res, 200, { ok: true, lastPull, undoAvailable: !!(lastPull && lastPull.newSha === head) });
+  }
+
+  // v3.5.0: pull from every remote in sequence, reusing pullRepo's
+  // mode / autostash handling per remote. A failure on one remote
+  // never stops the others; a merge conflict stops the loop, because
+  // git cannot start another pull while a merge is in progress (the
+  // remaining remotes are reported as skipped). Autostash restore is
+  // owned by git/pullRepo, so no half-applied stash is left behind.
+  // Note: pullRepo's lastPull bookkeeping keeps only the most recent
+  // pull, so Undo only undoes the last remote's pull.
+  if (route === '/api/git/pull/remotes' && req.method === 'POST') {
+    const mode = body.mode || 'merge';
+    const autostash = body.autostash === true;
+    const remoteNames = (await runGit(['remote'])).split('\n').map((r) => r.trim()).filter(Boolean);
+    if (!remoteNames.length) {
+      const e = new Error('Repo chưa có remote nào — thêm remote (ví dụ origin) trong panel Remotes trước khi Pull.');
+      e.code = 'NO_REMOTE';
+      throw e;
+    }
+    const current = await currentBranch();
+    const results = [];
+    let stoppedByConflict = false;
+    for (const remote of remoteNames) {
+      if (stoppedByConflict) {
+        results.push({ remote, ok: false, pulled: false, error: 'Bỏ qua: đang có merge conflict từ remote trước — xử lý conflict rồi pull lại.' });
+        continue;
+      }
+      const upstream = current && !current.startsWith('(') ? await upstreamOf(current) : null;
+      let branch = null;
+      if (upstream && upstream.startsWith(`${remote}/`)) {
+        branch = null; // pullRepo pulls the configured upstream
+      } else {
+        branch = await remoteDefaultBranch(remote);
+        if (!branch) {
+          results.push({ remote, ok: false, pulled: false, error: `Nhánh hiện tại không theo dõi ${remote} và không xác định được nhánh mặc định của remote này.` });
+          continue;
+        }
+      }
+      try {
+        const pulled = await pullRepo({ mode, remote, branch, autostash, useGithubAuth: body.useGithubAuth !== false });
+        if (pulled.conflict) {
+          stoppedByConflict = true;
+          results.push({ remote, ok: false, pulled: false, conflict: true, conflicts: pulled.conflicts || [], error: 'Merge conflict — xử lý conflict rồi pull lại.' });
+        } else {
+          results.push({ remote, ok: pulled.ok, pulled: pulled.ok && !pulled.upToDate, commitsPulled: pulled.commitsPulled || 0, branch: pulled.branch, error: null });
+        }
+      } catch (err) {
+        results.push({ remote, ok: false, pulled: false, error: cleanGitOutput(err.message).split('\n')[0] });
+      }
+    }
+    return send(req, res, 200, { ok: results.some((r) => r.ok), results, ...(await aheadBehind()) });
   }
 
   if (route === '/api/git/push' && req.method === 'POST') {
@@ -3590,6 +3944,118 @@ async function handle(req, res) {
       if (!entry.pushUrl) entry.pushUrl = entry.fetchUrl;
     }
     return send(req, res, 200, { ok: true, remotes: [...byName.values()] });
+  }
+
+  /* ---- worktrees + graph + upstream (v3.5.0) ---- */
+  if (route === '/api/git/worktrees' && req.method === 'GET') {
+    return send(req, res, 200, { ok: true, worktrees: await listWorktrees() });
+  }
+
+  if (route === '/api/git/worktree/add' && req.method === 'POST') {
+    if (!repoPath) throw new Error('No repository connected');
+    const expanded = expandHome(body.path);
+    if (!expanded) throw new Error('Worktree path is required');
+    if (!path.isAbsolute(expanded)) throw new Error('Worktree path must be absolute');
+    const target = path.resolve(expanded);
+    const main = path.resolve(repoPath);
+    if (target === main || target.startsWith(main + path.sep)) {
+      throw new Error('Không tạo worktree bên trong repo chính — chọn một thư mục ngoài repo (ví dụ cùng cấp với repo).');
+    }
+    if (fs.existsSync(target) && fs.statSync(target).isDirectory() && fs.readdirSync(target).length) {
+      throw new Error(`Directory is not empty: ${target}`);
+    }
+    const branch = body.branch ? validateBranchName(body.branch) : null;
+    const ref = body.ref ? validateGitRef(body.ref) : null;
+    const args = ['worktree', 'add'];
+    if (branch) args.push('-b', branch);
+    args.push(target);
+    if (ref) args.push(ref);
+    const result = await runGit(args);
+    const entry = (await listWorktrees()).find((w) => path.resolve(w.path) === target) || null;
+    return send(req, res, 200, { ok: true, worktree: entry, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/worktree/remove' && req.method === 'POST') {
+    if (!repoPath) throw new Error('No repository connected');
+    const expanded = expandHome(body.path);
+    if (!expanded) throw new Error('Worktree path is required');
+    if (!path.isAbsolute(expanded)) throw new Error('Worktree path must be absolute');
+    const target = path.resolve(expanded);
+    const main = path.resolve(repoPath);
+    if (target === main) throw new Error('Không xóa được worktree chính của repo.');
+    const found = (await listWorktrees()).find((w) => path.resolve(w.path) === target);
+    if (!found) throw new Error(`Không tìm thấy worktree: ${target}`);
+    const args = ['worktree', 'remove'];
+    if (body.force === true) args.push('--force');
+    args.push(target);
+    const result = await runGit(args);
+    return send(req, res, 200, { ok: true, path: target, result: (result || '').trim() });
+  }
+
+  if (route === '/api/git/graph' && req.method === 'GET') {
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+    if (!(await hasHead())) return send(req, res, 200, { ok: true, lines: [] });
+    const raw = await runGit(['log', '--graph', '--all', '--decorate', '--oneline', '-n', String(limit)]);
+    return send(req, res, 200, { ok: true, lines: raw.split('\n').filter((l) => l.trim()) });
+  }
+
+  // v3.5.0: blame for one file, via `git blame --line-porcelain`.
+  // Shape matches what dashboard.js showBlame() accepts:
+  // { ok, path, ref, lines: [{ line, sha, author, email, date (ISO), summary, content }] }
+  if (route === '/api/git/blame' && req.method === 'GET') {
+    const rel = safeRel(url.searchParams.get('path'));
+    const ref = url.searchParams.get('ref') ? validateGitRef(url.searchParams.get('ref')) : 'HEAD';
+    if (!(await hasHead())) return send(req, res, 200, { ok: true, path: rel, ref, lines: [] });
+    const raw = await runGit(['blame', '--line-porcelain', ref, '--', rel]);
+    const lines = [];
+    let cur = null;
+    for (const rawLine of raw.split('\n')) {
+      // Porcelain header is "<sha> <orig-line> <final-line> [num-lines]":
+      // the trailing count is omitted for the last group of a boundary
+      // commit, so it must be optional (a strict 4-field match silently
+      // drops that group and merges its line into the previous one).
+      const header = rawLine.match(/^([0-9a-f]{40}) \d+ (\d+)(?: \d+)?$/);
+      if (header) {
+        if (cur) lines.push(cur);
+        cur = { line: Number(header[2]), sha: header[1], author: '', email: '', date: '', summary: '', content: '' };
+        continue;
+      }
+      if (!cur) continue;
+      if (rawLine.startsWith('author ')) cur.author = rawLine.slice(7);
+      else if (rawLine.startsWith('author-mail ')) cur.email = rawLine.slice(12).replace(/^<|>$/g, '');
+      else if (rawLine.startsWith('author-time ')) {
+        const ts = Number(rawLine.slice(12));
+        cur.date = Number.isFinite(ts) ? new Date(ts * 1000).toISOString() : '';
+      } else if (rawLine.startsWith('summary ')) cur.summary = rawLine.slice(8);
+      else if (rawLine.startsWith('\t')) cur.content = rawLine.slice(1);
+    }
+    if (cur) lines.push(cur);
+    return send(req, res, 200, { ok: true, path: rel, ref, lines, blame: lines });
+  }
+
+  // v3.5.0: commit history of one file (`git log --follow`).
+  // Shape matches dashboard.js showFileHistory() and /api/git/log:
+  // { ok, path, commits: [{ sha, hash, subject, author, date, email }] }
+  if (route === '/api/git/file-history' && req.method === 'GET') {
+    const rel = safeRel(url.searchParams.get('path'));
+    if (!(await hasHead())) return send(req, res, 200, { ok: true, path: rel, commits: [] });
+    const raw = await runGit(['log', '--follow', '--max-count=50', '--date=short', '--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%ae', '--', rel]);
+    const commits = raw
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [sha, hash, subject, author, date, email] = line.split('\x1f');
+        return { sha, hash, subject, author, date, email };
+      });
+    return send(req, res, 200, { ok: true, path: rel, commits, history: commits });
+  }
+
+  if (route === '/api/git/upstream' && req.method === 'GET') {
+    const ab = await aheadBehind();
+    if (!ab.upstream) {
+      return send(req, res, 200, { ok: true, upstream: null, remote: null, branch: ab.branch, ahead: null, behind: null });
+    }
+    return send(req, res, 200, { ok: true, upstream: ab.upstream, remote: ab.upstream.split('/')[0], branch: ab.branch, ahead: ab.ahead, behind: ab.behind });
   }
 
   if (route === '/api/git/remote/add' && req.method === 'POST') {
