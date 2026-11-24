@@ -168,10 +168,11 @@ async function showAheadBehind() {
 function showAutoUpdate(status) {
   const box = $('autoUpdateState');
   if (!status) { box.textContent = '—'; return; }
-  if (!status.enabled) { box.textContent = 'Off'; return; }
+  if (!status.enabled) { box.textContent = 'Off' + (status.dotenvSynced === true ? ' · .env saved' : ''); return; }
   const last = status.lastRunAt ? new Date(status.lastRunAt).toLocaleTimeString() : 'never';
   box.textContent = `On · every ${status.intervalSeconds}s · last check ${last}` +
-    (status.updatesFound ? ` · ${status.updatesFound} update(s) found` : '');
+    (status.updatesFound ? ` · ${status.updatesFound} update(s) found` : '') +
+    (status.dotenvSynced === true ? ' · .env saved' : '');
 }
 
 // v3.0 — download the connected local repository as a .zip through the

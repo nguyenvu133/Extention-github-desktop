@@ -118,7 +118,8 @@ const { URL } = require('url');
 /* machine's .env (that would sign them in with a real PAT against    */
 /* their mock GitHub). Supported keys (see bridge/.env.example):      */
 /* BRIDGE_TOKEN, BRIDGE_PORT, GITHUB_PAT, GITHUB_OAUTH_CLIENT_ID,     */
-/* GITHUB_OAUTH_CLIENT_SECRET, DEFAULT_REPO_PATH. Only the KEY NAMES  */
+/* GITHUB_OAUTH_CLIENT_SECRET, DEFAULT_REPO_PATH, and auto-update     */
+/* settings. Only the KEY NAMES are ever logged, never the values.   */
 /* are ever logged, never the values. .env is git-ignored (see        */
 /* .gitignore) and must NEVER be pushed to GitHub — it can hold live  */
 /* secrets.                                                           */
@@ -145,7 +146,7 @@ function loadDotEnv() {
 }
 const DOTENV_KEYS = loadDotEnv();
 
-const VERSION = '3.6.0';
+const VERSION = '3.7.0';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -785,8 +786,12 @@ function signInWithToken(token, user, scopes, authMethod) {
   ghConfig.authMethod = authMethod;
   ghConfig.scopes = scopes || null;
   saveGhConfig();
+  let dotenvSaved = false;
+  try { updateDotEnvValues({ GITHUB_PAT: String(token) }); dotenvSaved = true; }
+  catch (err) { log('Could not sync GitHub sign-in to .env:', err.message); }
   sseBroadcast('github-auth', { authed: true, login: user.login, authMethod, at: ghConfig.authedAt });
   log(`GitHub signed in as ${user.login} (${authMethod}, scopes: ${scopes || 'unknown'})`);
+  return { dotenvSaved };
 }
 
 /* --- normalisers: the extension only ever sees these shapes --- */
@@ -968,6 +973,23 @@ const autoUpdate = {
   lastAutoSync: null, // { at, repo, branch, commitsPulled, error } or null
 };
 
+function autoUpdateDotEnvMatches() {
+  try {
+    const file = path.join(DATA_DIR, '.env');
+    const contents = fs.readFileSync(file, 'utf8');
+    const values = {
+      GITHUB_AUTO_UPDATE_ENABLED: autoUpdate.enabled ? 'true' : 'false',
+      GITHUB_AUTO_UPDATE_INTERVAL_SECONDS: String(autoUpdate.intervalSeconds),
+      GITHUB_AUTO_SYNC: autoUpdate.autoSync ? 'true' : 'false',
+    };
+    const found = Object.create(null);
+    for (const line of contents.split(/\r?\n/)) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (m && Object.prototype.hasOwnProperty.call(values, m[1])) found[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+    }
+    return Object.entries(values).every(([key, value]) => found[key] === value);
+  } catch (_) { return false; }
+}
 function autoUpdateStatus() {
   return {
     enabled: autoUpdate.enabled,
@@ -981,6 +1003,7 @@ function autoUpdateStatus() {
     lastError: autoUpdate.lastError,
     trackedRepos: autoUpdate.lastShaByRepo.size,
     lastAutoSync: autoUpdate.lastAutoSync,
+    dotenvSynced: autoUpdateDotEnvMatches(),
   };
 }
 
@@ -1049,18 +1072,65 @@ function scheduleAutoUpdate() {
   if (autoUpdate.timer.unref) autoUpdate.timer.unref();
 }
 
+function updateDotEnvValues(values) {
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== null && value !== undefined && /[\r\n]/.test(String(value))) throw new Error(`Invalid newline in .env value for ${key}`);
+  }
+  const file = path.join(DATA_DIR, '.env');
+  let lines = [];
+  try { if (fs.existsSync(file)) lines = fs.readFileSync(file, 'utf8').split(/\r?\n/); } catch (err) { throw new Error(`Cannot read .env: ${err.message}`); }
+  const keys = new Set(Object.keys(values));
+  const seen = new Set();
+  const next = [];
+  for (const line of lines) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (match && keys.has(match[1])) {
+      const value = values[match[1]];
+      if (!seen.has(match[1]) && value !== null && value !== undefined) next.push(`${match[1]}=${String(value)}`);
+      seen.add(match[1]);
+    } else next.push(line);
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (!seen.has(key) && value !== null && value !== undefined) next.push(`${key}=${String(value)}`);
+  }
+  const content = next.join('\n').replace(/\n*$/, '\n');
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temp, content, { mode: 0o600 });
+    fs.chmodSync(temp, 0o600);
+    fs.renameSync(temp, file);
+    try { fs.chmodSync(file, 0o600); } catch (_) {}
+  } catch (err) {
+    try { fs.unlinkSync(temp); } catch (_) {}
+    throw new Error(`Cannot save .env: ${err.message}`);
+  }
+  return true;
+}
+function persistAutoUpdateToDotEnv() {
+  return updateDotEnvValues({
+    GITHUB_AUTO_UPDATE_ENABLED: autoUpdate.enabled ? 'true' : 'false',
+    GITHUB_AUTO_UPDATE_INTERVAL_SECONDS: String(autoUpdate.intervalSeconds),
+    GITHUB_AUTO_SYNC: autoUpdate.autoSync ? 'true' : 'false',
+  });
+}
+
 function setAutoUpdate(enabled, intervalSeconds, autoSync) {
   autoUpdate.enabled = !!enabled;
   if (intervalSeconds !== undefined) autoUpdate.intervalSeconds = clampInterval(intervalSeconds);
   if (autoSync !== undefined) autoUpdate.autoSync = !!autoSync;
   ghConfig.autoUpdate = { enabled: autoUpdate.enabled, intervalSeconds: autoUpdate.intervalSeconds, autoSync: autoUpdate.autoSync };
   saveGhConfig();
+  let dotenvSaved = false;
+  let dotenvError = null;
+  try { persistAutoUpdateToDotEnv(); dotenvSaved = true; }
+  catch (err) { dotenvError = err.message; log('Could not sync auto-update settings to .env:', err.message); }
   scheduleAutoUpdate();
   if (autoUpdate.enabled) {
     // Run one tick right away so the user sees fresh data immediately.
     setTimeout(() => { autoUpdateTick(false); }, 500).unref?.();
   }
-  return autoUpdateStatus();
+  return { ...autoUpdateStatus(), dotenvSaved, dotenvError };
 }
 
 /**
@@ -2439,8 +2509,8 @@ async function handle(req, res) {
     }
     if (token.length < 20) throw new Error('That does not look like a GitHub token (too short)');
     const { user, scopes } = await ghValidateToken(token);
-    signInWithToken(token, user, scopes, 'pat');
-    return send(req, res, 200, { ok: true, user: publicUser() });
+    const saved = signInWithToken(token, user, scopes, 'pat');
+    return send(req, res, 200, { ok: true, user: publicUser(), dotenvSaved: saved.dotenvSaved });
   }
 
   if (route === '/api/github/auth/device/start' && req.method === 'POST') {
@@ -2510,9 +2580,12 @@ async function handle(req, res) {
     repoListCache = { at: 0, repos: [] };
     ghCache.clear();
     saveGhConfig();
+    let dotenvSaved = false;
+    try { updateDotEnvValues({ GITHUB_PAT: null }); dotenvSaved = true; }
+    catch (err) { log('Could not remove GitHub PAT from .env during sign-out:', err.message); }
     sseBroadcast('github-auth', { authed: false, login: null, at: new Date().toISOString() });
     if (wasLogin) log(`GitHub signed out (was ${wasLogin})`);
-    return send(req, res, 200, { ok: true, authed: false });
+    return send(req, res, 200, { ok: true, authed: false, dotenvSaved });
   }
 
   if (route === '/api/github/me' && req.method === 'GET') {
@@ -2573,10 +2646,14 @@ async function handle(req, res) {
     if (!clientId) throw new Error('Client ID is required (from your GitHub OAuth App)');
     if (!clientSecret) throw new Error('Client Secret is required (from your GitHub OAuth App)');
     if (clientId.length < 5 || clientSecret.length < 10) throw new Error('Client ID / Client Secret look too short — check what you pasted');
+    if (/[\r\n]/.test(clientId) || /[\r\n]/.test(clientSecret)) throw new Error('Client ID / Client Secret must not contain line breaks');
     oauthAppConfig = { clientId, clientSecret };
     saveOAuthAppConfig();
+    let dotenvSaved = false;
+    try { updateDotEnvValues({ GITHUB_OAUTH_CLIENT_ID: clientId, GITHUB_OAUTH_CLIENT_SECRET: clientSecret }); dotenvSaved = true; }
+    catch (err) { log('Could not sync OAuth App settings to .env:', err.message); }
     log('OAuth App configured (client id set, secret stored locally, never returned)');
-    return send(req, res, 200, { ok: true, configured: true, callbackUrl: oauthCallbackUrl() });
+    return send(req, res, 200, { ok: true, configured: true, callbackUrl: oauthCallbackUrl(), dotenvSaved });
   }
 
   if (route === '/api/github/oauth/start' && req.method === 'GET') {
@@ -4273,9 +4350,15 @@ async function handle(req, res) {
 loadState();
 loadGhConfig();
 loadOAuthAppConfig();
-autoUpdate.enabled = !!(ghConfig.autoUpdate && ghConfig.autoUpdate.enabled);
-autoUpdate.intervalSeconds = clampInterval(ghConfig.autoUpdate && ghConfig.autoUpdate.intervalSeconds);
-autoUpdate.autoSync = !!(ghConfig.autoUpdate && ghConfig.autoUpdate.autoSync);
+function envBoolean(name, fallback) {
+  if (process.env[name] === undefined || process.env[name] === '') return fallback;
+  return /^(1|true|yes|on)$/i.test(String(process.env[name]).trim());
+}
+autoUpdate.enabled = envBoolean('GITHUB_AUTO_UPDATE_ENABLED', !!(ghConfig.autoUpdate && ghConfig.autoUpdate.enabled));
+autoUpdate.intervalSeconds = process.env.GITHUB_AUTO_UPDATE_INTERVAL_SECONDS !== undefined && process.env.GITHUB_AUTO_UPDATE_INTERVAL_SECONDS !== ''
+  ? clampInterval(process.env.GITHUB_AUTO_UPDATE_INTERVAL_SECONDS)
+  : clampInterval(ghConfig.autoUpdate && ghConfig.autoUpdate.intervalSeconds);
+autoUpdate.autoSync = envBoolean('GITHUB_AUTO_SYNC', !!(ghConfig.autoUpdate && ghConfig.autoUpdate.autoSync));
 scheduleAutoUpdate();
 
 /* v3.5.1: auto-configure from .env / environment before listening,   */

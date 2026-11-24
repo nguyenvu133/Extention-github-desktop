@@ -1,5 +1,5 @@
 @echo off
-REM bridge\register-native-host.bat - v3.6.0 - CRLF + ASCII only.
+REM bridge\register-native-host.bat - v3.7.0 - CRLF + ASCII only.
 REM Dang ky Native Messaging host 1 lan duy nhat (Windows + Chrome).
 REM Sau buoc nay, extension co the mo bridge bang 1 nut bam
 REM (khong can mo start-windows.bat bang tay nua).

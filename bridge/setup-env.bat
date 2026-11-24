@@ -1,8 +1,7 @@
 @echo off
-REM bridge\setup-env.bat - v3.6.0 - CRLF + ASCII only.
+REM bridge\setup-env.bat - v3.7.0 - CRLF + ASCII only.
 REM Tao bridge\.env mot lan duy nhat (Windows).
-REM Hoi 3 gia tri (PAT GitHub, OAuth Client ID, OAuth Client Secret) +
-REM duong dan repo mac dinh, roi ghi vao bridge\.env.
+REM Hoi GitHub/OAuth, repo path va auto-update options, ghi vao bridge\.env.
 REM Chay: double-click file nay trong thu muc bridge, hoac
 REM   bridge\setup-env.bat
 REM Sau do chay bridge nhu binh thuong - no tu doc .env, khong can dan
@@ -25,6 +24,14 @@ set /p "PAT=GitHub PAT (ghp_... hoac github_pat_...): "
 set /p "CID=OAuth Client ID (vd Ov23...): "
 set /p "CSEC=OAuth Client Secret: "
 set /p "REPO=Duong dan repo mac dinh (vd C:\Users\ban\MyRepo, de trong neu chua co): "
+set /p "AUTOUPDATE=Bat GitHub auto-update? (y/N): "
+set "AUTOUPDATEVALUE=false"
+if /i "%AUTOUPDATE%"=="y" set "AUTOUPDATEVALUE=true"
+set /p "AUTOINTERVAL=Chu ky auto-update bang giay (15-3600, mac dinh 60): "
+if "%AUTOINTERVAL%"=="" set "AUTOINTERVAL=60"
+set /p "AUTOSYNC=Tu dong pull khi working tree sach? (y/N): "
+set "AUTOSYNCVALUE=false"
+if /i "%AUTOSYNC%"=="y" set "AUTOSYNCVALUE=true"
 REM Sinh bridge token on dinh (64 ky hex) bang PowerShell; neu loi thi de trong.
 set "BTOKEN="
 for /f "delims=" %%T in ('powershell -NoProfile -Command "[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')" 2^>nul') do set "BTOKEN=%%T"
@@ -40,6 +47,9 @@ if "%BTOKEN%"=="" (
   echo GITHUB_OAUTH_CLIENT_ID=%CID%
   echo GITHUB_OAUTH_CLIENT_SECRET=%CSEC%
   echo DEFAULT_REPO_PATH=%REPO%
+  echo GITHUB_AUTO_UPDATE_ENABLED=%AUTOUPDATEVALUE%
+  echo GITHUB_AUTO_UPDATE_INTERVAL_SECONDS=%AUTOINTERVAL%
+  echo GITHUB_AUTO_SYNC=%AUTOSYNCVALUE%
 ) > "%ENV_FILE%"
 echo.
 echo Xong: bridge\.env da duoc tao.

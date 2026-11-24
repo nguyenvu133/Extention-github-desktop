@@ -2,7 +2,7 @@
 require('./_node16-fetch'); // Node 16.13 has no global fetch
 
 /*
- * tests/native-host-test.js — Native Messaging host v3.6.0
+ * tests/native-host-test.js — Native Messaging host v3.7.0
  * ("nut 1 cham mo bridge").
  *
  * CONTRACT (what bridge/native-host.js + the extension must implement;

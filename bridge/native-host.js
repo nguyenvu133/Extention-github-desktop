@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bridge/native-host.js - Native Messaging host for PixiJS GitHub Bridge.
-// v3.6.0 - Node 16.13+, NO dependencies (only built-in modules).
+// v3.7.0 - Node 16.13+, NO dependencies (only built-in modules).
 //
 // Chrome extensions cannot run .bat files. The one-time-registered
 // native host below is the only way the extension can start the bridge
@@ -43,7 +43,7 @@ var http = require('http');
 var path = require('path');
 var childProcess = require('child_process');
 
-var VERSION = '3.6.0';
+var VERSION = '3.7.0';
 var BRIDGE_DIR = __dirname;
 var PORT = Number(process.env.BRIDGE_PORT || 17321) || 17321;
 var HOST = '127.0.0.1';

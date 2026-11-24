@@ -116,7 +116,7 @@ async function main() {
     !/github_pat_[A-Za-z0-9]{20,}/.test(example) && !/ghp_[A-Za-z0-9]{20,}/.test(example) && !/Ov23[A-Za-z0-9]{10,}/.test(example),
     'example must be a template, not real credentials');
   check('.env.example documents all supported keys',
-    ['BRIDGE_TOKEN=', 'BRIDGE_PORT=', 'GITHUB_PAT=', 'GITHUB_OAUTH_CLIENT_ID=', 'GITHUB_OAUTH_CLIENT_SECRET=', 'DEFAULT_REPO_PATH=']
+    ['BRIDGE_TOKEN=', 'BRIDGE_PORT=', 'GITHUB_PAT=', 'GITHUB_OAUTH_CLIENT_ID=', 'GITHUB_OAUTH_CLIENT_SECRET=', 'DEFAULT_REPO_PATH=', 'GITHUB_AUTO_UPDATE_ENABLED=', 'GITHUB_AUTO_UPDATE_INTERVAL_SECONDS=', 'GITHUB_AUTO_SYNC=']
       .every((k) => example.includes(k)));
   const gitignore = fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8');
   check('.gitignore blocks .env (real file) but not .env.example',
@@ -126,11 +126,11 @@ async function main() {
   const batText = batBuf.toString('utf8');
   check('setup-env.bat: CRLF on every line, 100% ASCII, no BOM',
     !batBuf.slice(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) && batText.split('\r\n').every((l) => /^[\x00-\x7F]*$/.test(l)) && !/\n(?!\r)/.test(batText.replace(/\r\n/g, '')) && batText.includes('endlocal'));
-  check('setup-env.bat: writes .env with BRIDGE_TOKEN + GITHUB_PAT + OAuth',
-    /GITHUB_PAT=/.test(batText) && /BRIDGE_TOKEN=/.test(batText) && /GITHUB_OAUTH_CLIENT_ID=/.test(batText) && /\.env/.test(batText));
+  check('setup-env.bat: writes .env with bridge/GitHub/OAuth/auto-update settings',
+    /GITHUB_PAT=/.test(batText) && /BRIDGE_TOKEN=/.test(batText) && /GITHUB_OAUTH_CLIENT_ID=/.test(batText) && /GITHUB_AUTO_UPDATE_ENABLED=/.test(batText) && /GITHUB_AUTO_UPDATE_INTERVAL_SECONDS=/.test(batText) && /GITHUB_AUTO_SYNC=/.test(batText) && /\.env/.test(batText));
   const shText = fs.readFileSync(path.join(ROOT, 'bridge', 'setup-env.sh'), 'utf8');
-  check('setup-env.sh: LF only, ASCII, chmod 600, writes .env',
-    !/\r/.test(shText) && /^[\x00-\x7F]*$/.test(shText) && /chmod 600/.test(shText) && /GITHUB_PAT=/.test(shText));
+  check('setup-env.sh: LF only, ASCII, chmod 600, writes .env + auto-update options',
+    !/\r/.test(shText) && /^[\x00-\x7F]*$/.test(shText) && /chmod 600/.test(shText) && /GITHUB_PAT=/.test(shText) && /GITHUB_AUTO_UPDATE_ENABLED=/.test(shText) && /GITHUB_AUTO_UPDATE_INTERVAL_SECONDS=/.test(shText) && /GITHUB_AUTO_SYNC=/.test(shText));
   try { fs.accessSync(path.join(ROOT, 'bridge', 'setup-env.sh'), fs.constants.X_OK); check('setup-env.sh is executable', true); }
   catch (_) { check('setup-env.sh is executable', false); }
 
@@ -175,10 +175,35 @@ async function main() {
     const emails = await call(17391, ENV_BRIDGE_TOKEN, 'GET', '/api/github/user/emails');
     check('bridge 1: real-login email check sees nguyenvu16592b@gmail.com',
       Array.isArray(emails.emails) && emails.emails.some((e) => e.email === 'nguyenvu16592b@gmail.com' && e.primary === true), j(emails));
+    const oauthSaved = await call(17391, ENV_BRIDGE_TOKEN, 'POST', '/api/github/oauth/config', { clientId: FAKE_CLIENT_ID, clientSecret: FAKE_CLIENT_SECRET });
+    let credentialEnv = fs.readFileSync(path.join(dataDir1, '.env'), 'utf8');
+    check('dashboard OAuth config is synchronized into private .env', oauthSaved.ok === true && oauthSaved.dotenvSaved === true && credentialEnv.includes(`GITHUB_OAUTH_CLIENT_ID=${FAKE_CLIENT_ID}`) && credentialEnv.includes(`GITHUB_OAUTH_CLIENT_SECRET=${FAKE_CLIENT_SECRET}`));
+    const patSaved = await call(17391, ENV_BRIDGE_TOKEN, 'POST', '/api/github/auth', { token: GOOD_PAT });
+    credentialEnv = fs.readFileSync(path.join(dataDir1, '.env'), 'utf8');
+    check('dashboard PAT sign-in is synchronized into private .env', patSaved.ok === true && patSaved.dotenvSaved === true && credentialEnv.includes(`GITHUB_PAT=${GOOD_PAT}`));
+    const badOauth = await call(17391, ENV_BRIDGE_TOKEN, 'POST', '/api/github/oauth/config', { clientId: FAKE_CLIENT_ID, clientSecret: `${FAKE_CLIENT_SECRET}\nGITHUB_AUTO_SYNC=true` });
+    check('OAuth config rejects newline injection', badOauth.status === 400);
+    const configured = await call(17391, ENV_BRIDGE_TOKEN, 'POST', '/api/github/auto-update', { enabled: true, intervalSeconds: 300, autoSync: true });
+    const savedEnv = fs.readFileSync(path.join(dataDir1, '.env'), 'utf8');
+    check('auto-update API reports local .env synchronized', configured.ok === true && configured.dotenvSaved === true && configured.dotenvSynced === true, j(configured));
+    check('auto-update update preserves secrets/comments and saves all three fields', savedEnv.includes('# comment line — ignored') && savedEnv.includes(`GITHUB_PAT=${GOOD_PAT}`) && savedEnv.includes(`GITHUB_OAUTH_CLIENT_SECRET=${FAKE_CLIENT_SECRET}`) && /GITHUB_AUTO_UPDATE_ENABLED=true/.test(savedEnv) && /GITHUB_AUTO_UPDATE_INTERVAL_SECONDS=300/.test(savedEnv) && /GITHUB_AUTO_SYNC=true/.test(savedEnv));
+    check('auto-update .env permissions stay 0600', (fs.statSync(path.join(dataDir1, '.env')).mode & 0o777) === 0o600);
   }
   b1.bridge.kill('SIGTERM');
-
   /* ---------- 2. real env wins over .env ---------- */
+  await new Promise((resolve) => b1.bridge.once('exit', resolve));
+  const b1Restart = startBridge(17391, dataDir1);
+  try { await waitForListening(b1Restart.bridge, b1Restart.getOut); } catch (err) { console.log('  FAIL  bridge 1 restart -> ' + err.message); return cleanup(1); }
+  {
+    const restored = await call(17391, ENV_BRIDGE_TOKEN, 'GET', '/api/github/auto-update');
+    check('auto-update .env settings restore after bridge restart', restored.enabled === true && restored.intervalSeconds === 300 && restored.autoSync === true && restored.dotenvSynced === true, j(restored));
+  }
+  const loggedOut = await call(17391, ENV_BRIDGE_TOKEN, 'POST', '/api/github/logout', {});
+  const afterLogout = fs.readFileSync(path.join(dataDir1, '.env'), 'utf8');
+  check('logout removes GITHUB_PAT from .env but retains OAuth app config', loggedOut.ok === true && loggedOut.dotenvSaved === true && !/^GITHUB_PAT=/m.test(afterLogout) && afterLogout.includes(`GITHUB_OAUTH_CLIENT_SECRET=${FAKE_CLIENT_SECRET}`));
+  b1Restart.bridge.kill('SIGTERM');
+  await new Promise((resolve) => b1Restart.bridge.once('exit', resolve));
+
   console.log('\n[2] precedence: real environment variable beats .env');
   const dataDir2 = path.join(tmp, 'data2');
   fs.mkdirSync(dataDir2, { recursive: true });

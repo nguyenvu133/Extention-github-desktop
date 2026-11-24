@@ -1,6 +1,6 @@
 #!/bin/sh
 # bridge/register-native-host.sh - Register the Native Messaging host
-# once (macOS / Linux + Chrome). v3.6.0 - LF + ASCII only.
+# once (macOS / Linux + Chrome). v3.7.0 - LF + ASCII only.
 #
 # Usage:
 #   1. Open Chrome, go to chrome://extensions, enable "Developer mode".

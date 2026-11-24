@@ -624,6 +624,7 @@ async function loginWithPat() {
   let res;
   try {
     res = await gh('/auth', 'POST', { token });
+    if (res.dotenvSaved === false) throw new Error('Signed in, but bridge/.env could not be updated. Check file permissions/free space.');
   } catch (err) {
     if (/INVALID_TOKEN_FORMAT/.test(err.message)) {
       $('patWarning').textContent = TOKEN_FORMAT_HINT;
@@ -799,6 +800,7 @@ async function saveOAuthConfig() {
   if (!clientSecret) throw new Error('Paste the Client Secret from your GitHub OAuth App first');
   const res = await gh('/oauth/config', 'POST', { clientId, clientSecret });
   $('oauthClientSecret').value = '';
+  if (res.dotenvSaved === false) throw new Error('OAuth App is saved locally, but bridge/.env could not be updated. Check file permissions/free space.');
   oauthConfigured = !!res.configured;
   $('oauthCallbackUrl').textContent = res.callbackUrl || $('oauthCallbackUrl').textContent;
   await loadOAuthStatus();
@@ -870,7 +872,7 @@ function showAutoUpdate(status) {
   if (!status) return;
   const el = $('autoUpdateState');
   if (!status.enabled) {
-    el.textContent = 'Auto-update is off.';
+    el.textContent = 'Auto-update is off.' + (status.dotenvSynced === true ? ' · settings saved to local .env' : '');
     $('autoSyncState').textContent = '';
     $('autoSyncToggle').checked = false;
     $('autoSyncToggle').disabled = true;
@@ -880,7 +882,8 @@ function showAutoUpdate(status) {
   const next = status.nextRunAt ? new Date(status.nextRunAt).toLocaleTimeString() : '—';
   el.textContent = `On · every ${status.intervalSeconds}s · last check ${last} · next ${next}` +
     (status.updatesFound ? ` · ${status.updatesFound} update(s) found` : '') +
-    (status.lastError ? ` · last error: ${status.lastError}` : '');
+    (status.lastError ? ` · last error: ${status.lastError}` : '') +
+    (status.dotenvSynced === true ? ' · settings saved to local .env' : ' · .env sync pending');
   $('autoSyncToggle').disabled = false;
   $('autoSyncToggle').checked = !!status.autoSync;
   const lastSync = status.lastAutoSync;
@@ -919,6 +922,7 @@ async function setAutoUpdateUI(enabled, intervalSeconds, autoSync) {
   if (autoSync !== undefined) body.autoSync = !!autoSync;
   const status = await gh('/auto-update', 'POST', body);
   showAutoUpdate(status);
+  if (status.dotenvSaved === false) throw new Error(status.dotenvError || 'Could not save the auto-update settings to bridge/.env');
   await chrome.storage.local.set({ autoUpdateEnabled: status.enabled, autoUpdateInterval: status.intervalSeconds });
   return status;
 }

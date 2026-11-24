@@ -125,7 +125,7 @@ async function main() {
       const iv = setInterval(() => { if (bridgeOut.includes('Listening:')) { clearTimeout(t); clearInterval(iv); resolve(); } }, 100);
     });
   } catch (err) { console.log('  FAIL  bridge starts -> ' + err.message); return cleanup(1); }
-  check('bridge v3.6.0 starts on Node ' + process.version, /v3\.6\.0/.test(bridgeOut));
+  check('bridge v3.7.0 starts on Node ' + process.version, /v3\.7\.0/.test(bridgeOut));
 
   const token = fs.readFileSync(path.join(dataDir, '.bridge-token'), 'utf8').trim();
   const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };

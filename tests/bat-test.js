@@ -2,14 +2,14 @@
 require('./_node16-fetch'); // Node 16.13 has no global fetch
 
 /*
- * tests/bat-test.js — Windows launcher / doctor script checks (v3.6.0).
+ * tests/bat-test.js — Windows launcher / doctor script checks (v3.7.0).
  *
  * Covers the five launcher/doctor scripts, which the bridge tests never
  * execute:
  *   bridge/start-windows.bat, bridge/bridge-doctor.bat,
  *   bridge/start-windows.ps1, bridge/start-mac-linux.sh,
  *   bridge/bridge-doctor.sh
- * plus (section [9], v3.6.0) the native-host register/unregister
+ * plus (section [9], v3.7.0) the native-host register/unregister
  * scripts bridge/register-native-host.bat and (if it exists)
  * bridge/unregister-native-host.bat — same bytes + structure rules,
  * plus the registry key + manifest generation checks.
@@ -592,8 +592,8 @@ async function main() {
     check('setup-env.sh: executable bit set', (fs.statSync(path.join(ROOT, 'bridge', 'setup-env.sh')).mode & 0o111) !== 0);
   }
 
-  /* ==================== 9. register/unregister native host (v3.6.0) ==================== */
-  console.log('\n[9] register-native-host.bat + unregister-native-host.bat — native host 1 lan (v3.6.0)');
+  /* ==================== 9. register/unregister native host (v3.7.0) ==================== */
+  console.log('\n[9] register-native-host.bat + unregister-native-host.bat — native host 1 lan (v3.7.0)');
   {
     // HONEST LIMIT (same as [0]/[1]): .bat files are verified by BYTES +
     // STRUCTURE only — cmd.exe cannot run on Linux, and the registry

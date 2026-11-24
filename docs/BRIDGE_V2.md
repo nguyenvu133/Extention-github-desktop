@@ -1083,3 +1083,29 @@ sót sau khi chạy.
    Windows / Chrome thật**: `.bat` mới chỉ kiểm chứng bằng bytes +
    cấu trúc trên Linux; chưa ai đúp chuột thật, chưa ghi registry thật,
    chưa bấm nút trên Chrome thật (giới hạn đã ghi rõ trong README mục 3).
+
+
+## 12. v3.7.0 — Auto-update configuration persisted to .env
+
+> Version: **3.7.0** · Date: 2026-11-24
+
+- OAuth Client ID/Secret and PAT entered through the dashboard now sync to
+  private `.env` as well as their existing private config files; Sign out
+  removes `GITHUB_PAT` from `.env` but preserves the OAuth App config. Newline
+  injection into OAuth values is rejected. Secrets never appear in API
+  responses or logs.
+- Added `GITHUB_AUTO_UPDATE_ENABLED`, `GITHUB_AUTO_UPDATE_INTERVAL_SECONDS`
+  (clamped to 15..3600), and `GITHUB_AUTO_SYNC` as startup configuration
+  read from the local `.env`; system environment variables retain precedence.
+- Changing auto-update options in the dashboard writes those three values
+  back to `DATA_DIR/.env` and the existing private GitHub config. The writer
+  preserves unrelated keys/comments, removes duplicate copies of managed
+  keys, writes via a temporary file + rename, and enforces POSIX mode 0600.
+  It never returns or logs PAT/OAuth values.
+- Auto-sync remains opt-in and safe: it only attempts to pull the matching
+  connected local repository when the worktree is clean.
+- The GET/POST auto-update status reports whether the effective settings
+  match `.env`; the dashboard surfaces successful sync and reports write
+  errors instead of silently implying persistence.
+- `.env.example`, Windows and shell setup wizards, README and `env-test.js`
+  now cover these settings.

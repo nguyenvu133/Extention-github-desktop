@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.6.0
+# PixiJS GitHub Desktop Sync — v3.7.0
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -381,9 +381,9 @@ vẫn phải do chính bạn bấm trong trình duyệt — bridge không thể 
 Nếu bạn chán dán lại token mỗi lần tải code mới về, dùng file `.env`:
 
 **Cách nhanh nhất (Windows):** đúp chuột vào `bridge\setup-env.bat`
-(Mac/Linux: `sh bridge/setup-env.sh`). Nó hỏi 3 thứ rồi ghi vào
-`bridge\.env` cho bạn: mã GitHub PAT, OAuth Client ID, OAuth Client
-Secret, và đường dẫn repo mặc định. Nó cũng tự sinh một bridge token
+(Mac/Linux: `sh bridge/setup-env.sh`). Nó hỏi GitHub PAT, OAuth Client ID/Secret, đường dẫn repo mặc định,
+Auto-update bật/tắt, chu kỳ kiểm tra và Auto-sync rồi ghi vào
+`bridge\.env` cho bạn. Nó cũng tự sinh một bridge token
 ổn định rồi in ra màn hình — bạn dán token đó **1 lần duy nhất** vào
 extension (mục LOCAL BRIDGE), sau này không cần dán lại nữa.
 
@@ -392,7 +392,14 @@ các giá trị vào. Các khóa được hỗ trợ: `BRIDGE_TOKEN` (token ổn
 thay vì sinh ngẫu nhiên), `BRIDGE_PORT`, `GITHUB_PAT` (tự đăng nhập
 GitHub khi bridge khởi động), `GITHUB_OAUTH_CLIENT_ID`,
 `GITHUB_OAUTH_CLIENT_SECRET`, `DEFAULT_REPO_PATH` (tự chọn repo khi
-mở bridge). Biến môi trường thật luôn thắng cùng khóa trong `.env`.
+mở bridge), `GITHUB_AUTO_UPDATE_ENABLED`,
+`GITHUB_AUTO_UPDATE_INTERVAL_SECONDS`, `GITHUB_AUTO_SYNC`. Auto-update
+được giới hạn 15–3600 giây (mặc định 60); auto-sync chỉ pull khi cây làm
+việc sạch. Khi đổi các công tắc/chu kỳ trong dashboard, bridge cập nhật
+ngay ba khóa này trong `.env` lẫn cấu hình cục bộ; giữ nguyên PAT/OAuth,
+ghi chú và các khóa khác. `.env` được ghi atomic với quyền 0600 trên
+macOS/Linux và được `.gitignore` loại khỏi Git. Biến môi trường hệ thống
+thật luôn có độ ưu tiên cao hơn `.env`.
 
 Sau đó chỉ cần chạy bridge như bình thường — nó tự đọc `.env`, tự đăng
 nhập GitHub, tự cấu hình OAuth App, tự chọn repo. Lần đầu mở dashboard
@@ -531,6 +538,61 @@ auto-update đang bật):
 > **Lưu ý:** auto-update chỉ **phát hiện** commit mới; muốn lấy code mới về
 > repo local mà không bật auto-sync, dùng nút **Pull** ở tab Local Git
 > (mục 9).
+
+### Cấu hình auto-update đầy đủ và tự lưu vào `.env` (v3.7.0)
+
+Có hai cách đặt cấu hình; dashboard là cách khuyến nghị vì nó tự ghi lại
+`.env` sau mỗi thay đổi:
+
+1. Kết nối bridge và đăng nhập GitHub trước. PAT/OAuth vẫn được lưu cục bộ
+   theo quy tắc bảo mật ở mục 12; extension không nhận lại token thô.
+2. Trong tab **Repositories**, bật **Auto-update** để bridge định kỳ kiểm
+   tra repo GitHub. Chọn khoảng kiểm tra trong UI (15 giây, 30 giây, 1,
+   5 hoặc 15 phút); API nhận khoảng 15–3600 giây và chuẩn hoá về giới hạn
+   này. Mặc định là tắt, 60 giây.
+3. Tuỳ chọn **Auto-sync (pull)** chỉ được bật khi Auto-update đang bật.
+   Khi có commit mới trên repo trùng remote của repo local đã kết nối,
+   bridge chỉ pull khi working tree sạch; nếu có thay đổi chưa commit hoặc
+   chưa có branch phù hợp, thao tác bị bỏ qua và lý do được ghi trạng thái.
+   Không có force-pull và không tự bỏ thay đổi chưa commit.
+4. Mỗi lần lưu auto-update từ dashboard, ba khóa `GITHUB_AUTO_UPDATE_ENABLED`,
+   `GITHUB_AUTO_UPDATE_INTERVAL_SECONDS`, `GITHUB_AUTO_SYNC` được đồng
+   bộ vào `bridge/.env` và `.github-config.json`. Khi lưu OAuth Client ID/Secret
+   hoặc đăng nhập bằng PAT/OAuth, bridge cũng ghi `GITHUB_OAUTH_CLIENT_ID`,
+   `GITHUB_OAUTH_CLIENT_SECRET` và `GITHUB_PAT` vào `.env` để lần khởi động
+   sau tự cấu hình/đăng nhập; thao tác **Sign out** xóa `GITHUB_PAT` khỏi
+   `.env` nhưng giữ OAuth App để bạn có thể đăng nhập lại. Dashboard hiện
+   **settings saved to local .env** khi đã đồng bộ; nếu không ghi được
+   `.env`, nó báo lỗi thay vì báo lưu thành công. Sau khi khởi động lại,
+   bridge khôi phục lựa chọn đã lưu.
+5. Có thể cấu hình bằng tay trong `bridge/.env.example` → copy thành
+   `bridge/.env`, rồi điền các biến. Hoặc chạy `bridge/setup-env.bat` trên
+   Windows / `sh bridge/setup-env.sh` trên macOS/Linux; wizard hỏi các giá
+   trị GitHub, repo và 3 tuỳ chọn auto-update. Chu kỳ ngoài 15–3600 giây
+   được clamp khi bridge khởi động.
+6. Thứ tự ưu tiên là biến môi trường của hệ điều hành trước, `.env` sau,
+   rồi cấu hình đã lưu cục bộ. Nếu bạn đã export `GITHUB_AUTO_UPDATE_*`
+   trong môi trường chạy bridge, hãy sửa chính biến môi trường đó để tránh
+   nó ghi đè giá trị trong `.env` ở lần chạy sau.
+7. `.env` có thể chứa PAT và OAuth Client Secret: không đưa file thật lên
+   GitHub, không dán vào issue/chat, không chia sẻ ảnh chụp. Bridge giữ
+   quyền file 0600 trên hệ thống POSIX; file được ghi qua file tạm rồi
+   rename để giảm nguy cơ ghi dở. Khi đổi auto-update chỉ ba khóa auto-update
+   được sửa; khi đổi thông tin đăng nhập chỉ khóa credential tương ứng được
+   sửa. Comment và cấu hình không liên quan được giữ lại; giá trị PAT/secret
+   không bao giờ được trả về dashboard hoặc ghi vào log.
+
+Các khóa `.env`:
+
+| Khóa | Ý nghĩa | Mặc định |
+|---|---|---|
+| `GITHUB_AUTO_UPDATE_ENABLED` | Tự phát hiện commit mới | `false` |
+| `GITHUB_AUTO_UPDATE_INTERVAL_SECONDS` | Chu kỳ kiểm tra (15–3600 giây) | `60` |
+| `GITHUB_AUTO_SYNC` | Tự pull repo local khi có commit mới và working tree sạch | `false` |
+
+Auto-update gọi GitHub cho tối đa 100 repo mỗi tick, dùng cache/ETag khi
+có thể; đây là tính năng chạy khi bridge còn hoạt động, không phải dịch vụ
+đám mây luôn chạy nếu bạn tắt máy hoặc đóng bridge.
 
 ---
 
@@ -681,7 +743,7 @@ Extention-github-desktop/
 │   ├── native-host-manifest.json.example  # Mẫu manifest (placeholder YOUR_EXTENSION_ID_HERE) — file thật đã gitignore
 │   ├── register-native-host.bat / unregister-native-host.bat  # Đăng ký / gỡ host 1 lần (Windows, ghi registry HKCU...NativeMessagingHosts)
 │   ├── register-native-host.sh    # Đăng ký host 1 lần (macOS/Linux, ghi ~/.config/google-chrome/NativeMessagingHosts/)
-│   ├── package.json               # version 3.6.0, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all/test:v360
+│   ├── package.json               # version 3.7.0, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all/test:v360/test:v370
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   ├── start-windows.bat          # Chạy bridge (Windows) — CRLF + ASCII, kiểm tra Node/cổng, đợi /health, ghi bridge-start.log
 │   ├── start-windows.ps1          # Chạy bridge (Windows, PowerShell) — phương án 2 khi .bat bị chặn
@@ -717,8 +779,8 @@ Extention-github-desktop/
 
 | Token | Lưu ở đâu | Ai thấy được |
 |---|---|---|
-| **Token GitHub (PAT/OAuth)** | `bridge/.github-config.json` trên máy bạn, mode 0600, đã gitignore (hoặc `GITHUB_PAT` trong `bridge/.env`, cũng 0600 và gitignore) | Chỉ bridge (đọc file) — **không gửi cho extension, không log, không commit** |
-| **OAuth App Client Secret** | `bridge/.github-oauth.json` trên máy bạn, mode 0600, đã gitignore (hoặc biến môi trường `GITHUB_OAUTH_CLIENT_SECRET` / `bridge/.env`) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
+| **Token GitHub (PAT/OAuth access token)** | `bridge/.github-config.json` và `GITHUB_PAT` trong `bridge/.env` trên máy bạn (cả hai gitignore; quyền 0600 trên POSIX) | Chỉ bridge — **không gửi raw token cho extension, không log, không commit** |
+| **OAuth App Client Secret** | `bridge/.github-oauth.json` và `GITHUB_OAUTH_CLIENT_SECRET` trong `bridge/.env` (cả hai gitignore; quyền 0600 trên POSIX) | Chỉ bridge (đổi code lấy token) — **không gửi cho extension, không log, không commit** |
 | **Token bridge** | `bridge/.bridge-token` trên máy bạn, mode 0600, đã gitignore; bản copy trong `chrome.storage` của extension (hoặc `BRIDGE_TOKEN` trong `bridge/.env`) | Extension (để gọi API bridge), bạn (copy từ terminal) |
 | **Native host 1 chạm** (v3.6.0) | `bridge/native-host-manifest.json` (sinh bởi `register-native-host.bat` / `.sh`, đã gitignore — chứa đường dẫn tuyệt đối + Extension ID) + registry key `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.pixijs.github.bridge` (Windows) hoặc `~/.config/google-chrome/NativeMessagingHosts/com.pixijs.github.bridge.json` (macOS/Linux) | Chỉ Chrome (để tìm host) — **không chứa token/secret nào**; host chỉ chạy 2 launcher có sẵn trong `bridge/` và chỉ trả token bridge cho extension đã đăng ký trong `allowed_origins` |
 | **Cài đặt** (URL bridge, repo local, auto-update) | `chrome.storage` | Chỉ extension |
@@ -1070,6 +1132,16 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 ---
 
 ## 16. Lịch sử phiên bản
+
+- **v3.7.0 (2026-11-24)** — Cấu hình GitHub auto-update đầy đủ hơn:
+  `GITHUB_AUTO_UPDATE_ENABLED`, chu kỳ `GITHUB_AUTO_UPDATE_INTERVAL_SECONDS`
+  (15–3600 giây) và `GITHUB_AUTO_SYNC` được đọc từ `.env` khi khởi động,
+  tự cập nhật vào `.env` khi đổi trong dashboard; PAT/OAuth nhập từ dashboard
+  cũng tự sync vào `.env`, và sign-out xóa PAT. Credentials vẫn được lưu trong
+  các file config riêng hiện có. Ghi `.env` atomic, giữ nguyên secrets/comments và
+  đặt mode 0600; dashboard cho biết trạng thái sync. Wizard Windows và
+  macOS/Linux hỏi cấu hình auto-update. Test mới xác nhận ghi/khôi phục
+  sau restart và bảo vệ permission.
 
 - **v3.6.0 (2026-11-23)** — **Nút 1 chạm mở bridge:** popup và
   dashboard có nút **KHỞI ĐỘNG BRIDGE** — bấm 1 lần là bridge tự chạy

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * tests/run-all.js — Run the FULL v3.6.0 test suite in one command.
+ * tests/run-all.js — Run the FULL v3.7.0 test suite in one command.
  *
  *   node tests/run-all.js
  *
@@ -35,7 +35,7 @@ function runNode(file) {
 }
 
 async function main() {
-  console.log(`\n=== PixiJS GitHub Desktop Sync v3.6.0 — full test suite ===\n`);
+  console.log(`\n=== PixiJS GitHub Desktop Sync v3.7.0 — full test suite ===\n`);
   console.log(`Starting a real bridge on 127.0.0.1:${BRIDGE_PORT} ...`);
 
   const bridge = spawn(process.execPath, [path.join(ROOT, 'bridge', 'bridge-server.js')], {
@@ -70,7 +70,7 @@ async function main() {
     ['validate-manifest.js', 'Manifest (root + extension/)'],
     ['load-from-root-test.js', 'Load unpacked from repo root or extension/'],
     ['bat-test.js', 'Launcher/doctor scripts (bytes + batch parser + .sh real runs)'],
-    ['native-host-test.js', 'Native host v3.6.0 (framed stdio protocol + start-bridge/get-token/status/setup-env + no token leak)'],
+    ['native-host-test.js', 'Native host v3.7.0 (framed stdio protocol + start-bridge/get-token/status/setup-env + no token leak)'],
     ['bridge-v2-test.js', 'Bridge v2 (mock GitHub API + dashboard in vm)'],
     ['bridge-v21-test.js', 'Bridge v2.1 (push/pull expansion + OAuth Web Flow + auto-sync)'],
     ['bridge-v3-test.js', 'Bridge v3.0 (login diagnostics + PAT guard + zip + GitHub API v3 + cherry-pick/revert/reset/tags)'],
@@ -79,7 +79,7 @@ async function main() {
     ['bridge-v310-test.js', 'Bridge v3.1.0 (extended pull/push: preview, autostash, undo, rebase flow, all branches, refspecs, multi-remote, history, GitHub token, Node 16.13)'],
     ['bridge-v311-test.js', 'Bridge v3.1.1 (toolbar routes: recent/find repo, per-remote fetch + GitHub token, clone into ~/GitHub, publish branch)'],
     ['bridge-v350-test.js', 'Bridge v3.5.0 (pull origin incl. autostash/rebase/undo/pull-remotes/upstream, mock-OAuth end-to-end, Actions/commit/compare/languages/contributors/topics/issue+PR detail, worktrees, graph)'],
-    ['env-test.js', 'Bridge v3.5.1 (.env auto-config: parser, PAT auto sign-in, OAuth auto-config, DEFAULT_REPO_PATH, precedence, setup scripts)'],
+    ['env-test.js', 'Bridge v3.7.0 (.env auto-config + auto-update persistence: parser, PAT auto sign-in, OAuth auto-config, DEFAULT_REPO_PATH, precedence, setup scripts)'],
     ['extension-test.js', 'Extension functional (local Git against the live bridge)'],
   ];
   let failed = 0;
