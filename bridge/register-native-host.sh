@@ -1,6 +1,6 @@
 #!/bin/sh
 # bridge/register-native-host.sh - Register the Native Messaging host
-# once (macOS / Linux + Chrome). v3.7.0 - LF + ASCII only.
+# once (macOS / Linux + Chrome). v3.7.1 - LF + ASCII only.
 #
 # Usage:
 #   1. Open Chrome, go to chrome://extensions, enable "Developer mode".
@@ -31,7 +31,7 @@ if [ ! -f "$HOSTJS" ]; then
 fi
 if ! command -v node >/dev/null 2>&1; then
   echo "[ERROR] Node.js is not installed."
-  echo "Install Node.js 16.13+ from https://nodejs.org/ and run this script again."
+  echo "Install Node.js 12+ from https://nodejs.org/ and run this script again."
   exit 1
 fi
 chmod +x "$HOSTJS"

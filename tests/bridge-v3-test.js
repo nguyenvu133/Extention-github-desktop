@@ -511,7 +511,7 @@ async function main() {
   {
     const res = await fetch(BASE + '/health');
     const h = await res.json();
-    check('health reports v3.0.1', h.version === '3.7.0', JSON.stringify(h.version));
+    check('health reports v3.0.1', h.version === '3.7.1', JSON.stringify(h.version));
   }
 
   /* ==================== 1. DIAGNOSTICS (bad token) ==================== */

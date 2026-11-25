@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PixiJS GitHub Desktop Sync",
-  "version": "3.7.0",
+  "version": "3.7.1",
   "description": "Run real Git operations on a local repository from Chrome through a secured local bridge.",
   "permissions": [
     "storage",

@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Test helper (v3.1.0): Node 16.13 has no global fetch. The test suites
+ * Test helper (v3.1.0): Node 12/16 have no global fetch. The test suites
  * talk to the bridge with fetch(), so on Node < 18 this installs a small
  * built-in-only replacement. On Node 18+ it does nothing.
  *

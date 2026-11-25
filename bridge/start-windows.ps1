@@ -1,5 +1,5 @@
 ﻿# PixiJS GitHub Desktop Sync - bridge launcher (Windows, PowerShell)
-# v3.7.0 - Phuong an 2 khi start-windows.bat bi SmartScreen hoac
+# v3.7.1 - Phuong an 2 khi start-windows.bat bi SmartScreen hoac
 # antivirus chan. Cach chay: chuot phai file -> Run with PowerShell,
 # hoac mo PowerShell roi go:
 #   powershell -ExecutionPolicy Bypass -File .\start-windows.ps1
@@ -26,7 +26,7 @@ function Fail($msg) {
   exit 1
 }
 
-Write-Log '=== PixiJS GitHub Bridge v3.7.0 (PowerShell) ==='
+Write-Log '=== PixiJS GitHub Bridge v3.7.1 (PowerShell) ==='
 Write-Log "Thu muc bridge: $PSScriptRoot"
 Write-Log "Cong: $port"
 Write-Blank
@@ -35,7 +35,7 @@ $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   Write-Blank
   Write-Log '[LOI] Node.js chua duoc cai dat tren may nay.'
-  Write-Log 'Cach sua: cai Node.js 16.13 tro len tai https://nodejs.org/'
+  Write-Log 'Cach sua: cai Node.js 12.0 tro len tai https://nodejs.org/'
   Write-Log 'Sau khi cai xong, dong cua so nay va chay lai start-windows.ps1'
   Write-Log 'Nhan Enter de dong cua so nay.'
   Read-Host | Out-Null
@@ -45,12 +45,12 @@ $nodeVer = (node -v).Trim()
 $major = 0
 if ($nodeVer -match '^v(\d+)\.') { $major = [int]$Matches[1] }
 if ($major -eq 0) {
-  Fail 'Khong doc duoc phien ban Node.js (node -v khong tra ve ket qua). Cai lai Node.js 16.13 tro len tai https://nodejs.org/ roi chay lai file nay.'
+  Fail 'Khong doc duoc phien ban Node.js (node -v khong tra ve ket qua). Cai lai Node.js 12.0 tro len tai https://nodejs.org/ roi chay lai file nay.'
 }
 $minor = 0
 if ($nodeVer -match '^v\d+\.(\d+)\.') { $minor = [int]$Matches[1] }
-if ($major -lt 16 -or ($major -eq 16 -and $minor -lt 13)) {
-  Fail "Node.js qua cu: $nodeVer - bridge can Node.js 16.13 tro len. Cai Node.js 16.13 tro len tai https://nodejs.org/ roi chay lai file nay."
+if ($major -lt 12) {
+  Fail "Node.js qua cu: $nodeVer - bridge can Node.js 12.0 tro len. Cai Node.js 12.0 tro len tai https://nodejs.org/ roi chay lai file nay."
 }
 Write-Log "Node.js OK: $nodeVer"
 Write-Blank

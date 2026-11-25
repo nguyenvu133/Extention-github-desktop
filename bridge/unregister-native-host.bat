@@ -1,5 +1,5 @@
 @echo off
-REM bridge\unregister-native-host.bat - v3.7.0 - CRLF + ASCII only.
+REM bridge\unregister-native-host.bat - v3.7.1 - CRLF + ASCII only.
 REM Go dang ky Native Messaging host (Windows + Chrome).
 REM Xoa registry key + file manifest da sinh (neu co).
 setlocal

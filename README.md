@@ -1,4 +1,4 @@
-# PixiJS GitHub Desktop Sync — v3.7.0
+# PixiJS GitHub Desktop Sync — v3.7.1
 
 > **Đồng bộ GitHub ngay trong Chrome**: đăng nhập bằng **tài khoản GitHub thật**
 > (bấm "Kết nối GitHub", đăng nhập trên github.com), xem **tất cả repo** của
@@ -41,12 +41,12 @@ Chrome Extension (popup + dashboard)  ⇄  Bridge (Node.js, 127.0.0.1:17321)  �
 |---|---|
 | Máy tính | **Windows, macOS hoặc Linux** (xem mục 15 nếu bạn chỉ có điện thoại) |
 | Trình duyệt | **Google Chrome** (hoặc Chromium/Edge/Brave — bản desktop) |
-| Node.js | **≥ 16.13.0** (16.13, 18, 20, 22 đều chạy) — kiểm tra bằng `node --version`. Chưa có thì tải tại <https://nodejs.org> (bản LTS) |
+| Node.js | **≥ 12.0.0** (12, 14, 16, 18, 20, 22 đều chạy) — kiểm tra bằng `node --version`. Chưa có thì tải tại <https://nodejs.org> (bản LTS). Lưu ý: Node 12 đã hết hỗ trợ từ 2022, nên nếu cài được bản mới hơn thì vẫn nên dùng bản LTS mới nhất. |
 | Git | Đã cài sẵn (`git --version`). Cần cho tính năng Git local |
 | Tài khoản GitHub | Để đăng nhập và xem repo (mục 6) |
 
 **Không cần cài thêm thư viện nào.** Bridge chỉ dùng module có sẵn của Node
-(`http`, `https`, `fs`, `crypto`, `child_process`) — từ v3.1.0 không còn phụ thuộc `fetch` tích hợp nên chạy được trên Node 16.13 — không có
+(`http`, `https`, `fs`, `crypto`, `child_process`) — từ v3.1.0 không còn phụ thuộc `fetch` tích hợp nên chạy được trên Node 12 — không có
 `node_modules`, không cần `npm install`.
 
 ---
@@ -63,7 +63,7 @@ cd bridge
 
 # 3. (Không cần npm install — bridge không có dependency.)
 # Kiểm tra Node:
-node --version   # phải ra v16.13 trở lên
+node --version   # phải ra v12.0 trở lên
 ```
 
 > Lần đầu chạy, bridge tự tạo 2 file trong `bridge/`:
@@ -92,7 +92,7 @@ ghi log ra `bridge\bridge-start.log`, đợi `/health` rồi mới báo thành
 công, mọi lỗi đều giữ cửa sổ mở). Nếu vẫn không mở được:
 
 1. Kiểm tra đã **giải nén ZIP** ra thư mục chưa (đừng chạy file trong ZIP).
-2. Kiểm tra đã cài **Node.js 16.13+** chưa (`node -v` trong cmd).
+2. Kiểm tra đã cài **Node.js 12+** chưa (`node -v` trong cmd).
 3. Nếu Windows SmartScreen chặn: chuột phải file → **Properties** →
    tích **Unblock** (nếu có) → **OK**, rồi đúp chuột lại; hoặc bấm
    **More info → Run anyway** trên màn hình SmartScreen.
@@ -743,7 +743,7 @@ Extention-github-desktop/
 │   ├── native-host-manifest.json.example  # Mẫu manifest (placeholder YOUR_EXTENSION_ID_HERE) — file thật đã gitignore
 │   ├── register-native-host.bat / unregister-native-host.bat  # Đăng ký / gỡ host 1 lần (Windows, ghi registry HKCU...NativeMessagingHosts)
 │   ├── register-native-host.sh    # Đăng ký host 1 lần (macOS/Linux, ghi ~/.config/google-chrome/NativeMessagingHosts/)
-│   ├── package.json               # version 3.7.0, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all/test:v360/test:v370
+│   ├── package.json               # version 3.7.1, scripts start/test/test:v21/test:v3/test:v301/test:v302/test:all/test:v360/test:v361/test:v370
 │   ├── start-mac-linux.sh         # Chạy bridge (macOS/Linux)
 │   ├── start-windows.bat          # Chạy bridge (Windows) — CRLF + ASCII, kiểm tra Node/cổng, đợi /health, ghi bridge-start.log
 │   ├── start-windows.ps1          # Chạy bridge (Windows, PowerShell) — phương án 2 khi .bat bị chặn
@@ -756,7 +756,7 @@ Extention-github-desktop/
 │   ├── popup.html / popup.js / popup.css
 │   └── dashboard.html / dashboard.js / dashboard.css   # Dashboard kiểu github.com
 ├── tests/
-│   ├── run-all.js                 # Chạy cả 14 suite (tự khởi động bridge)
+│   ├── run-all.js                 # Chạy cả 15 suite (tự khởi động bridge)
 │   ├── bridge-v2-test.js          # Test v2: mock GitHub + bridge thật + dashboard vm
 │   ├── bridge-v21-test.js         # Test v2.1: push/pull thật + OAuth Web Flow + auto-sync
 │   ├── bridge-v3-test.js          # Test v3.0: chẩn đoán đăng nhập + zip + API v3 + git local mới
@@ -819,8 +819,8 @@ sai lệnh, cửa sổ tắt trước khi kịp hiện lỗi. Từ v3.0.2 file �
    thư mục rồi mới chạy. **Đừng** đúp chuột vào file `.bat` khi nó còn
    nằm trong ZIP (Windows mở file trong thư mục tạm, thiếu
    `bridge-server.js` nên tắt ngay).
-2. **Đã cài Node.js 16.13+ chưa?** Mở cmd, gõ `node -v` — phải thấy
-   `v16.13.x` trở lên. Chưa có thì cài tại <https://nodejs.org/> (bản LTS),
+2. **Đã cài Node.js 12+ chưa?** Mở cmd, gõ `node -v` — phải thấy
+   `v12.x` trở lên. Chưa có thì cài tại <https://nodejs.org/> (bản LTS),
    cài xong đóng hết cửa sổ cmd rồi chạy lại file `.bat`.
 3. **Windows SmartScreen chặn file tải từ internet?** Chuột phải file
    `.bat` → **Properties** → nếu có mục **Unblock** ở dưới thì tích vào
@@ -1038,7 +1038,7 @@ Toàn bộ test chạy bằng `node`, in PASS/FAIL từng mục, **không gọi
 api.github.com thật** (dùng mock GitHub chạy local).
 
 ```bash
-# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 14 suite, tắt bridge:
+# Chạy TẤT CẢ (khuyên dùng) — tự khởi động bridge, chạy 15 suite, tắt bridge:
 node tests/run-all.js
 # hoặc:
 npm --prefix bridge run test:all
@@ -1133,6 +1133,19 @@ giữa chừng → dashboard báo RECONNECTING/DISCONNECTED → khởi động l
 
 ## 16. Lịch sử phiên bản
 
+- **v3.7.1 (2026-11-25)** — **Chạy được trên Node.js 12:** hạ yêu cầu
+  tối thiểu từ 16.13 xuống **12.0.0** — sửa 5 chỗ dùng cú pháp/API sau
+  Node 12 trong `bridge-server.js` (`??` ở `normalizeRepo` và
+  rate-limit, `?.()` ở auto-update tick) thành cách viết tương đương
+  chạy được trên Node 12 (code `.env` sync mới của v3.7.0 đã không dùng
+  cú pháp mới nên giữ nguyên); hạ cổng kiểm tra phiên bản trong
+  `start-windows.bat` / `.ps1` / `.sh` và `bridge-doctor` xuống 12;
+  `engines` trong `package.json` thành `>=12.0.0`. Đã kiểm chứng bằng
+  Node 12.22.12 thật (suite mới `tests/node12-test.js` 14/14, chạy bridge
+  bằng `BRIDGE_NODE`). Lưu ý: Node 12 đã hết hỗ trợ từ 2022, nên nếu cài
+  được bản mới hơn thì vẫn nên dùng bản LTS mới nhất; toàn bộ suite test
+  còn lại vẫn chạy trên Node hiện tại (chỉ bridge là chạy được trên 12).
+  Test: 15 suite.
 - **v3.7.0 (2026-11-24)** — Cấu hình GitHub auto-update đầy đủ hơn:
   `GITHUB_AUTO_UPDATE_ENABLED`, chu kỳ `GITHUB_AUTO_UPDATE_INTERVAL_SECONDS`
   (15–3600 giây) và `GITHUB_AUTO_SYNC` được đọc từ `.env` khi khởi động,

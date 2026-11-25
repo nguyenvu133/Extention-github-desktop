@@ -1,6 +1,6 @@
 @echo off
 REM PixiJS GitHub Desktop Sync - bridge launcher (Windows)
-REM v3.7.0 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
+REM v3.7.1 - CRLF + ASCII only. cmd.exe expects CRLF line endings;
 REM a UTF-8 / LF-only .bat can be misparsed, so the window flashes
 REM and closes without showing the error. Keep this file ASCII + CRLF.
 setlocal EnableDelayedExpansion
@@ -8,7 +8,7 @@ title PixiJS GitHub Bridge
 cd /d "%~dp0"
 if not defined BRIDGE_PORT set BRIDGE_PORT=17321
 set LOG=bridge-start.log
-call :log "=== PixiJS GitHub Bridge v3.7.0 ==="
+call :log "=== PixiJS GitHub Bridge v3.7.1 ==="
 call :log "Thu muc bridge: %CD%"
 call :log "Cong: %BRIDGE_PORT%"
 call :logblank
@@ -16,7 +16,7 @@ call :log "[1/5] Kiem tra Node.js..."
 where node >nul 2>nul
 if errorlevel 1 goto :err_no_node
 for /f %%a in ('node -v') do set NODEVER=%%a
-REM v3.1.0: "v16.13.0" with delims "v." -> token 1 = 16 (major), token 2 = 13.
+REM v3.7.1: "v12.0.0" with delims "v." -> token 1 = 12 (major), token 2 = 0.
 REM (v3.0.2 read token 2, i.e. the MINOR number, so Node 22.11 looked "too old".)
 for /f "tokens=1,2 delims=v." %%a in ('node -v') do (
   set NODEMAJOR=%%a
@@ -24,8 +24,7 @@ for /f "tokens=1,2 delims=v." %%a in ('node -v') do (
 )
 if not defined NODEMAJOR goto :err_node_ver
 if not defined NODEMINOR set NODEMINOR=0
-if %NODEMAJOR% LSS 16 goto :err_node_old
-if %NODEMAJOR% EQU 16 if %NODEMINOR% LSS 13 goto :err_node_old
+if %NODEMAJOR% LSS 12 goto :err_node_old
 call :log "Node.js OK: %NODEVER%"
 call :logblank
 call :log "[2/5] Kiem tra file bridge-server.js..."
@@ -91,7 +90,7 @@ exit /b 0
 :err_no_node
 call :logblank
 call :log "[LOI] Node.js chua duoc cai dat tren may nay."
-call :log "Cach sua: cai Node.js 16.13 tro len tai https://nodejs.org/"
+call :log "Cach sua: cai Node.js 12.0 tro len tai https://nodejs.org/"
 call :log "Sau khi cai xong, dong cua so nay va chay lai start-windows.bat"
 call :log "Kiem tra: mo cmd roi go: node -v"
 call :log "Xem chi tiet trong bridge-start.log"
@@ -103,7 +102,7 @@ exit /b 1
 :err_node_ver
 call :logblank
 call :log "[LOI] Khong doc duoc phien ban Node.js (node -v khong tra ve ket qua)."
-call :log "Cai lai Node.js 16.13 tro len tai https://nodejs.org/ roi chay lai file nay."
+call :log "Cai lai Node.js 12.0 tro len tai https://nodejs.org/ roi chay lai file nay."
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul
 endlocal
@@ -111,8 +110,8 @@ exit /b 1
 
 :err_node_old
 call :logblank
-call :log "[LOI] Node.js qua cu: %NODEVER% - bridge can Node.js 16.13 tro len."
-call :log "Cach sua: cai Node.js 16.13 tro len tai https://nodejs.org/"
+call :log "[LOI] Node.js qua cu: %NODEVER% - bridge can Node.js 12.0 tro len."
+call :log "Cach sua: cai Node.js 12.0 tro len tai https://nodejs.org/"
 call :log "Sau khi cai xong, dong cua so nay va chay lai start-windows.bat"
 call :log "Nhan phim bat ky de dong cua so nay."
 pause >nul

@@ -3,9 +3,9 @@
 
 /*
  * PixiJS GitHub Desktop Sync - Local Git + GitHub Bridge
- * v3.5.0
+ * v3.7.1
  *
- * A dependency-free local bridge (Node >= 16.13, only built-in modules) that
+ * A dependency-free local bridge (Node >= 12, only built-in modules) that
  * exposes two things to the companion Chrome extension:
  *
  *   1. LOCAL GIT  - v1 feature set + v2.1 push/pull expansion: pull
@@ -42,7 +42,7 @@
  *      push up to a commit, multi-remote push, --follow-tags,
  *      --atomic, --no-verify, -o push options, --force-if-includes,
  *      explicit lease SHA; live progress over SSE; pull/push history;
- *      GitHub HTTPS remotes reuse the signed-in token. Node >= 16.13.
+ *      GitHub HTTPS remotes reuse the signed-in token. Node >= 12.
  *
  * Design rules (kept from v1, extended):
  *  - Binds to 127.0.0.1 only; never exposed to the network.
@@ -64,7 +64,7 @@
  *  - No plain --force / arbitrary shell endpoint. The only forceful
  *    operations are `git push --force-with-lease` and `git reset
  *    --hard`, each only when the caller passes confirm=true explicitly.
- *  - GitHub requests use httpFetch (built-in http/https, Node >= 16.13) with a timeout and
+ *  - GitHub requests use httpFetch (built-in http/https, Node >= 12) with a timeout and
  *    honour ETag/If-None-Match so auto-update polling is cheap.
  *
  * Environment overrides (useful for tests):
@@ -94,14 +94,17 @@ const { spawn } = require('child_process');
 const https = require('https');
 const zlib = require('zlib'); // v3.5.0: inflate GitHub Actions log ZIPs (no extra dependency)
 
-// v3.1.0: minimum Node.js is 16.13.0 (was 18). Fail loudly and clearly.
+// v3.7.1: minimum Node.js is 12.0.0 (was 16.13.0). The bridge avoids
+// every post-12 syntax/API on purpose (no ?. / ?? / replaceAll / .at /
+// AbortController / structuredClone — verified against Node 12.22.12),
+// so it runs on the old Node the user already has. Node 12 is EOL and
+// insecure, so the message still recommends a newer LTS when possible.
 (function checkNodeVersion() {
   const m = /^v(\d+)\.(\d+)/.exec(process.version) || [];
   const major = Number(m[1]) || 0;
-  const minor = Number(m[2]) || 0;
-  if (major < 16 || (major === 16 && minor < 13)) {
-    console.error(`\n[LOI] Node.js ${process.version} qua cu — bridge can Node.js 16.13.0 tro len.`);
-    console.error('Cai Node.js 16.13+ (khuyen dung ban LTS moi nhat) tai https://nodejs.org/ roi chay lai.\n');
+  if (major < 12) {
+    console.error(`\n[LOI] Node.js ${process.version} qua cu — bridge can Node.js 12.0.0 tro len.`);
+    console.error('Cai Node.js 12+ (khuyen dung ban LTS moi nhat) tai https://nodejs.org/ roi chay lai.\n');
     process.exit(1);
   }
 })();
@@ -146,7 +149,7 @@ function loadDotEnv() {
 }
 const DOTENV_KEYS = loadDotEnv();
 
-const VERSION = '3.7.0';
+const VERSION = '3.7.1';
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.BRIDGE_PORT || 17321);
 const ROOT = path.resolve(__dirname);
@@ -175,9 +178,9 @@ const REPO_LIST_CACHE_MS = 60 * 1000;
 const STARTED_AT = Date.now();
 
 /* ------------------------------------------------------------------ */
-/* httpFetch — tiny fetch() replacement (v3.1.0, Node 16.13+)          */
+/* httpFetch — tiny fetch() replacement (v3.1.0, Node 12+)             */
 /* ------------------------------------------------------------------ */
-/* Node 16 has no global fetch / AbortSignal.timeout / Readable.fromWeb */
+/* Node 12/16 have no global fetch / AbortSignal.timeout / Readable.fromWeb */
 /* so the bridge uses this instead on every Node version — one code    */
 /* path, built-in http/https only. Returns a fetch-like response:      */
 /*   { ok, status, headers.get(), text(), json(), arrayBuffer(), body } */
@@ -799,7 +802,7 @@ function signInWithToken(token, user, scopes, authMethod) {
 function normalizeRepo(r) {
   if (!r) return null;
   return {
-    id: r.id ?? null,
+    id: (r.id === undefined || r.id === null) ? null : r.id,
     name: r.name || '',
     full_name: r.full_name || r.name || '',
     owner: { login: (r.owner && r.owner.login) || '', avatar_url: (r.owner && r.owner.avatar_url) || '' },
@@ -1128,7 +1131,9 @@ function setAutoUpdate(enabled, intervalSeconds, autoSync) {
   scheduleAutoUpdate();
   if (autoUpdate.enabled) {
     // Run one tick right away so the user sees fresh data immediately.
-    setTimeout(() => { autoUpdateTick(false); }, 500).unref?.();
+    // (v3.7.1: no ?.() — Node 12 has no optional chaining/call.)
+    var _tickTimer = setTimeout(() => { autoUpdateTick(false); }, 500);
+    if (_tickTimer && typeof _tickTimer.unref === 'function') _tickTimer.unref();
   }
   return { ...autoUpdateStatus(), dotenvSaved, dotenvError };
 }
@@ -2759,10 +2764,11 @@ async function handle(req, res) {
       const core = (gh.data && gh.data.resources && gh.data.resources.core) || {};
       return send(req, res, 200, {
         ok: true,
-        limit: core.limit ?? lastRateLimit.limit,
-        remaining: core.remaining ?? lastRateLimit.remaining,
+        // v3.7.1: no ?? — Node 12 has no nullish coalescing.
+        limit: core.limit != null ? core.limit : lastRateLimit.limit,
+        remaining: core.remaining != null ? core.remaining : lastRateLimit.remaining,
         reset: core.reset ? new Date(core.reset * 1000).toISOString() : (lastRateLimit.reset ? new Date(lastRateLimit.reset * 1000).toISOString() : null),
-        used: core.used ?? lastRateLimit.used,
+        used: core.used != null ? core.used : lastRateLimit.used,
       });
     } catch (err) {
       if (err instanceof GhError) throw err;

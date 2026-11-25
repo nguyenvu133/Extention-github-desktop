@@ -1109,3 +1109,43 @@ sót sau khi chạy.
   errors instead of silently implying persistence.
 - `.env.example`, Windows and shell setup wizards, README and `env-test.js`
   now cover these settings.
+
+## 13. v3.7.1 — Chạy được trên Node.js 12
+
+> Phiên bản: **3.7.1** · Ngày: 2026-11-25 · Nền: v3.7.0 (commit `06f11819`)
+
+### 13.1. Vấn đề
+User dùng Node.js **v12.22.3**: bridge cũ thoát ngay vì cổng kiểm tra
+đòi ≥ 16.13, và kể cả bỏ cổng đó thì file cũng không parse được trên
+Node 12 (`SyntaxError: Unexpected token '?'` ở `r.id ?? null`).
+
+### 13.2. Đã sửa (gộp lên v3.7.0, không ghi đè tính năng `.env` sync)
+- `bridge-server.js`: 5 chỗ dùng cú pháp sau Node 12 → cách viết tương
+  đương: `r.id ?? null` → `(r.id === undefined || r.id === null) ? null : r.id`
+  (`normalizeRepo`), `core.limit ?? …` × 3 → `!= null ? … : …`
+  (rate-limit), `setTimeout(…).unref?.()` → gán biến rồi kiểm tra
+  `typeof …unref === 'function'` (auto-update tick). Kiểm kê trước khi
+  sửa: code `.env` sync mới của v3.7.0 (`updateDotEnvValues`,
+  `autoUpdateDotEnvMatches`) không dùng cú pháp mới nên giữ nguyên.
+- Cổng kiểm tra phiên bản hạ xuống **12.0.0**: `bridge-server.js`
+  (`checkNodeVersion`), `start-windows.bat` / `.ps1`, `start-mac-linux.sh`,
+  `bridge-doctor.bat` / `.sh`, `register-native-host.bat` / `.sh`;
+  `bridge/package.json` `engines: >=12.0.0`. Các test assert cổng cũ
+  (`LSS 16`, `-lt 16 -or`) đổi theo.
+- Suite mới `tests/node12-test.js` (14 checks): boot bridge thật bằng
+  `BRIDGE_NODE` (Node 12.22.12 thật), kiểm tra health/version,
+  `.env` auto sign-in, `/api/github/repos` (id 42 giữ nguyên, id null →
+  null), rate-limit, select repo + git status, bật auto-update rồi đợi
+  tick 500 ms (chỗ `?.()` cũ) — bridge vẫn sống. `BRIDGE_NODE` không
+  đặt thì dùng Node hiện tại.
+- Lưu ý: Node 12 đã EOL từ 2022 — README nói rõ nên dùng LTS mới nhất
+  nếu cài được; chỉ bridge là bắt buộc chạy được trên 12, còn harness
+  test đầy đủ (`run-all.js`, các suite cũ) vẫn dùng Node hiện tại vì
+  chính các file test có dùng `?.`/`??`.
+
+### 13.3. Kết quả kiểm chứng
+- `node12 --check bridge/bridge-server.js` + `native-host.js`: OK.
+- `BRIDGE_NODE=<node 12.22.12> node tests/node12-test.js`: **14/14**.
+- `node tests/run-all.js`: 15 suite, ALL SUITES PASSED (chạy 2 vòng).
+- Smoke test cấu hình thật trên Node 12: bridge boot với `bridge/.env`
+  thật, tự đăng nhập nguyenvu133 (PAT), OAuth App configured.

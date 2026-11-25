@@ -1,5 +1,5 @@
 @echo off
-REM bridge\register-native-host.bat - v3.7.0 - CRLF + ASCII only.
+REM bridge\register-native-host.bat - v3.7.1 - CRLF + ASCII only.
 REM Dang ky Native Messaging host 1 lan duy nhat (Windows + Chrome).
 REM Sau buoc nay, extension co the mo bridge bang 1 nut bam
 REM (khong can mo start-windows.bat bang tay nua).
@@ -83,7 +83,7 @@ exit /b 1
 :err_no_node
 echo.
 echo [LOI] Node.js chua duoc cai dat tren may nay.
-echo Cai Node.js 16.13 tro len tai https://nodejs.org/ roi chay lai file nay.
+echo Cai Node.js 12.0 tro len tai https://nodejs.org/ roi chay lai file nay.
 echo Nhan phim bat ky de dong cua so nay.
 pause >nul
 endlocal
